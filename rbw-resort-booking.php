@@ -100,14 +100,14 @@ $id = uniqid('rbw_', true);
 
 ob_start(); ?>
   <div class="rbw-wrap" data-rbw-widget="<?php echo esc_attr($id); ?>" <?php if($room_id!=='') echo 'data-rbw-room="'.esc_attr($room_id).'"'; ?>>
-    <button type="button" class="rbw-btn" data-rbw-open>এখনই বুক করুন</button>
+    <button type="button" class="rbw-btn" data-rbw-open>Book Now</button>
 
     <div class="rbw-backdrop" data-rbw-backdrop aria-hidden="true">
       <div class="rbw-modal" role="dialog" aria-modal="true">
         <div class="rbw-head">
           <div class="rbw-title">
-            <h3>তারিখ নির্বাচন করুন</h3>
-            <p>তারিখ অনুযায়ী ফাঁকা রুম/ট্রি দেখুন</p>
+            <h3>Select Dates</h3>
+            <p>View available rooms by date.</p>
           </div>
           <button type="button" class="rbw-close" data-rbw-close>Close</button>
         </div>
@@ -116,16 +116,17 @@ ob_start(); ?>
           <div class="rbw-grid">
             <div class="rbw-field">
               <label>Check-in</label>
-              <input data-rbw-in type="date">
+              <input data-rbw-in type="text" inputmode="none" autocomplete="off" placeholder="YYYY-MM-DD" readonly>
             </div>
             <div class="rbw-field">
               <label>Check-out</label>
-              <input data-rbw-out type="date">
+              <input data-rbw-out type="text" inputmode="none" autocomplete="off" placeholder="YYYY-MM-DD" readonly>
             </div>
           </div>
+          <div class="rbw-calendar" data-rbw-calendar></div>
 
           <div class="rbw-actions">
-            <button type="button" class="rbw-search" data-rbw-search>ফাঁকা রুম দেখুন</button>
+            <button type="button" class="rbw-search" data-rbw-search>View Available Rooms</button>
           </div>
 
 

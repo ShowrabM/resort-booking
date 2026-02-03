@@ -1,4 +1,4 @@
-<?php
+﻿<?php
 if (!defined('ABSPATH')) exit;
 
 class RBW_Admin {
@@ -159,7 +159,7 @@ class RBW_Admin {
                 <td><?php echo esc_html($guest); ?></td>
                 <td><a href="tel:<?php echo esc_attr($phone); ?>"><?php echo esc_html($phone); ?></a></td>
                 <td><?php echo esc_html($guests); ?></td>
-                <td><?php echo esc_html($check_in . ' → ' . $check_out); ?></td>
+                <td><?php echo esc_html($check_in . ' -> ' . $check_out); ?></td>
                 <td><?php echo wc_price((float)$deposit); ?></td>
                 <td><?php echo wc_price((float)$balance); ?></td>
                 <td>
@@ -331,3 +331,4 @@ class RBW_Admin {
     exit;
   }
 }
+

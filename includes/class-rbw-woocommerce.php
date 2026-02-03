@@ -1,4 +1,4 @@
-<?php
+﻿<?php
 if (!defined('ABSPATH')) exit;
 
 class RBW_WooCommerce {
@@ -28,13 +28,20 @@ class RBW_WooCommerce {
   public static function show_cart_meta($item_data, $cart_item){
     if (empty($cart_item['rbw'])) return $item_data;
     $b = $cart_item['rbw'];
+    $pay_mode = $b['pay_mode'] ?? 'deposit';
+    $discount = (float)($b['discount'] ?? 0);
+    $pay_now = isset($b['pay_now']) ? (float)$b['pay_now'] : (float)($b['deposit'] ?? 0);
 
     $item_data[] = ['name'=>'Room', 'value'=>esc_html($b['room_name'])];
-    $item_data[] = ['name'=>'Dates', 'value'=>esc_html($b['check_in'].' → '.$b['check_out'])];
+    $item_data[] = ['name'=>'Dates', 'value'=>esc_html($b['check_in'].' -> '.$b['check_out'])];
     $item_data[] = ['name'=>'Nights', 'value'=>esc_html($b['nights'])];
     $item_data[] = ['name'=>'Total', 'value'=>wc_price((float)$b['total'])];
-    $item_data[] = ['name'=>'Deposit Paid Now', 'value'=>wc_price((float)$b['deposit'])];
+    if ($discount > 0) {
+      $item_data[] = ['name'=>'Discount', 'value'=>wc_price($discount)];
+    }
+    $item_data[] = ['name'=>'Pay Now', 'value'=>wc_price($pay_now)];
     $item_data[] = ['name'=>'Balance Due', 'value'=>wc_price((float)$b['balance'])];
+    $item_data[] = ['name'=>'Payment Mode', 'value'=>esc_html($pay_mode === 'full' ? 'Full (5% off)' : 'Advance payment')];
     $item_data[] = ['name'=>'Guest Name', 'value'=>esc_html($b['customer_name'])];
     $item_data[] = ['name'=>'Phone', 'value'=>esc_html($b['customer_phone'])];
     $item_data[] = ['name'=>'Guests', 'value'=>esc_html($b['guests'])];
@@ -52,7 +59,7 @@ class RBW_WooCommerce {
         if ((string)$r['room_id'] === (string)$b['room_id']) { $ok = true; break; }
       }
       if (!$ok){
-        wc_add_notice('দুঃখিত! আপনার সিলেক্ট করা রুমটি এই তারিখে আর ফাঁকা নেই।', 'error');
+        wc_add_notice('Sorry! The selected room is no longer available for those dates.', 'error');
         return;
       }
     }
@@ -74,6 +81,10 @@ class RBW_WooCommerce {
     $item->add_meta_data('_rbw_total', (float)$b['total'], true);
     $item->add_meta_data('_rbw_deposit', (float)$b['deposit'], true);
     $item->add_meta_data('_rbw_balance', (float)$b['balance'], true);
+    if (isset($b['pay_mode'])) $item->add_meta_data('_rbw_pay_mode', (string)$b['pay_mode'], true);
+    if (isset($b['discount'])) $item->add_meta_data('_rbw_discount', (float)$b['discount'], true);
+    if (isset($b['pay_now'])) $item->add_meta_data('_rbw_pay_now', (float)$b['pay_now'], true);
+    if (isset($b['deposit_setting'])) $item->add_meta_data('_rbw_deposit_setting', (float)$b['deposit_setting'], true);
     $item->add_meta_data('_rbw_customer_name', (string)$b['customer_name'], true);
     $item->add_meta_data('_rbw_customer_phone', (string)$b['customer_phone'], true);
     $item->add_meta_data('_rbw_guests', (int)$b['guests'], true);
@@ -115,3 +126,6 @@ class RBW_WooCommerce {
 }
 
 add_filter('woocommerce_cart_item_name', ['RBW_WooCommerce','filter_cart_item_name'], 10, 2);
+
+
+

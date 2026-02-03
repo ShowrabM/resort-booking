@@ -1,4 +1,4 @@
-<?php
+﻿<?php
 if (!defined('ABSPATH')) exit;
 
 class RBW_Ajax {
@@ -17,12 +17,12 @@ class RBW_Ajax {
 
     if (!$check_in || !$check_out) {
       error_log('[RBW] availability missing dates');
-      wp_send_json_error(['message'=>'তারিখ সিলেক্ট করুন']);
+      wp_send_json_error(['message'=>'Please select dates.']);
     }
     $n = RBW_Availability::nights($check_in, $check_out);
     if ($n <= 0){
       error_log("[RBW] availability nights<=0 in={$check_in} out={$check_out}");
-      wp_send_json_error(['message'=>'Check-out অবশ্যই check-in এর পরে হবে']);
+      wp_send_json_error(['message'=>'Check-out must be after check-in.']);
     }
 
     $room_filter = sanitize_text_field($_POST['room_id'] ?? '');
@@ -42,13 +42,12 @@ class RBW_Ajax {
     $check_in = sanitize_text_field($_POST['check_in'] ?? '');
     $check_out = sanitize_text_field($_POST['check_out'] ?? '');
     $nights = (int)($_POST['nights'] ?? 0);
-    $total = (float)($_POST['total'] ?? 0);
-    $deposit = (float)($_POST['deposit'] ?? 0);
-    $balance = (float)($_POST['balance'] ?? 0);
     $ppn = (float)($_POST['price_per_night'] ?? 0);
     $customer_name = sanitize_text_field($_POST['customer_name'] ?? '');
     $customer_phone = sanitize_text_field($_POST['customer_phone'] ?? '');
     $guests = (int)($_POST['guests'] ?? 0);
+    $pay_mode = sanitize_text_field($_POST['pay_mode'] ?? 'deposit');
+    if ($pay_mode !== 'full') $pay_mode = 'deposit';
 
     if (!$room_id || !$check_in || !$check_out || !$customer_name || !$customer_phone || $guests <= 0) {
       wp_send_json_error(['message'=>'Missing required data']);
@@ -62,6 +61,17 @@ class RBW_Ajax {
     }
     if (!$match){
       wp_send_json_error(['message'=>'Room no longer available for those dates']);
+    }
+    $guests = max(1, $guests);
+    $ppn = (float)($match['price_per_night'] ?? 0);
+    $nights = (int)($match['nights'] ?? 0);
+    $deposit_setting = (float)($match['deposit'] ?? 0);
+    $total = $ppn * $nights * $guests;
+    $discount = ($pay_mode === 'full') ? ($total * 0.05) : 0;
+    $pay_now = ($pay_mode === 'full') ? max(0, $total - $discount) : $deposit_setting;
+    $balance = ($pay_mode === 'full') ? 0 : max(0, $total - $pay_now);
+    if (!empty($match['room_name'])) {
+      $room_name = sanitize_text_field($match['room_name']);
     }
 
     // Handle optional NID upload
@@ -88,13 +98,17 @@ class RBW_Ajax {
         '_rbw_check_out'=> $check_out,
         '_rbw_nights' => $nights,
         '_rbw_total' => $total,
-        '_rbw_deposit' => $deposit,
+        '_rbw_deposit' => $pay_now,
         '_rbw_balance' => $balance,
         '_rbw_price_per_night' => $ppn,
         '_rbw_customer_name' => $customer_name,
         '_rbw_customer_phone' => $customer_phone,
         '_rbw_guests' => $guests,
         '_rbw_nid_url' => $nid_url,
+        '_rbw_pay_mode' => $pay_mode,
+        '_rbw_discount' => $discount,
+        '_rbw_pay_now' => $pay_now,
+        '_rbw_deposit_setting' => $deposit_setting,
         '_rbw_status' => 'pending_payment',
       ]
     ]);
@@ -103,7 +117,7 @@ class RBW_Ajax {
       wp_send_json_error(['message'=>'Could not create booking record']);
     }
 
-    // Add virtual deposit product to cart with overridden price = deposit
+    // Add virtual payment product to cart with overridden price = pay now
     if (!class_exists('WooCommerce')) {
       wp_delete_post($booking_id, true);
       wp_send_json_error(['message'=>'WooCommerce not active']);
@@ -136,12 +150,16 @@ class RBW_Ajax {
         'nights' => $nights,
         'price_per_night' => $ppn,
         'total' => $total,
-        'deposit' => $deposit,
+        'deposit' => $pay_now,
         'balance' => $balance,
         'customer_name' => $customer_name,
         'customer_phone' => $customer_phone,
         'guests' => $guests,
         'nid_url' => $nid_url,
+        'pay_mode' => $pay_mode,
+        'discount' => $discount,
+        'pay_now' => $pay_now,
+        'deposit_setting' => $deposit_setting,
       ]
     ];
 
@@ -154,10 +172,10 @@ class RBW_Ajax {
     // Ensure totals reflect deposit price before redirect
     WC()->cart->calculate_totals();
 
-    // Override price to deposit amount
+    // Override price to amount paid now
     foreach (WC()->cart->get_cart() as $key => $item){
       if (!empty($item['rbw']['booking_id']) && (int)$item['rbw']['booking_id'] === (int)$booking_id){
-        $item['data']->set_price(max(0, $deposit));
+        $item['data']->set_price(max(0, $pay_now));
       }
     }
 
@@ -170,3 +188,5 @@ class RBW_Ajax {
     wp_send_json_success(['checkout_url' => $checkout]);
   }
 }
+
+
