@@ -83,6 +83,16 @@
       return json;
     };
 
+    const fetchWithTimeout = async (url, options = {}, timeoutMs = 25000) => {
+      const controller = new AbortController();
+      const t = setTimeout(() => controller.abort(), timeoutMs);
+      try{
+        return await fetch(url, { ...options, signal: controller.signal });
+      }finally{
+        clearTimeout(t);
+      }
+    };
+
     const handleError = (e, context) => {
       const msg = (e && e.message) ? e.message : 'Network error';
       console.error(`[RBW] ${context} failed`, e, e?.details);
@@ -419,7 +429,7 @@
       submitBtn.textContent = 'Processing...';
 
       try{
-        const res = await fetch(RBW.ajaxUrl, { method:'POST', credentials:'same-origin', body: fd });
+        const res = await fetchWithTimeout(RBW.ajaxUrl, { method:'POST', credentials:'same-origin', body: fd });
         const json = await parseResponse(res);
         if(!json.success){
           submitBtn.disabled = false;
@@ -427,7 +437,14 @@
           showAlert('err', json.data?.message || 'Error');
           return;
         }
-        window.location.href = json.data.checkout_url;
+        const checkoutUrl = json?.data?.checkout_url;
+        if (!checkoutUrl) {
+          submitBtn.disabled = false;
+          submitBtn.textContent = getPayMode() === 'full' ? 'Confirm & Pay Full' : 'Confirm & Pay Advance';
+          showAlert('err', 'Checkout URL missing. Please try again.');
+          return;
+        }
+        window.location.href = checkoutUrl;
       }catch(e){
         submitBtn.disabled = false;
         submitBtn.textContent = getPayMode() === 'full' ? 'Confirm & Pay Full' : 'Confirm & Pay Advance';
@@ -509,7 +526,7 @@
       if(roomFilter) fd.append('room_id', roomFilter);
 
       try{
-        const res = await fetch(RBW.ajaxUrl, { method:'POST', credentials:'same-origin', body: fd });
+        const res = await fetchWithTimeout(RBW.ajaxUrl, { method:'POST', credentials:'same-origin', body: fd });
         const json = await parseResponse(res);
 
         if(!json.success){
@@ -531,4 +548,3 @@
     });
   });
 })();
-
