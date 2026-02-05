@@ -25,8 +25,8 @@ class RBW_Ajax {
       wp_send_json_error(['message'=>'Check-out must be after check-in.']);
     }
 
-    $room_filter = sanitize_text_field($_POST['room_id'] ?? '');
-    $rooms = RBW_Availability::get_available($check_in, $check_out, $room_filter);
+    $group_filter = sanitize_text_field($_POST['group'] ?? '');
+    $rooms = RBW_Availability::get_available($check_in, $check_out, $group_filter);
     error_log('[RBW] availability ok rooms='.count($rooms));
     wp_send_json_success(['rooms' => $rooms]);
   }
@@ -37,8 +37,11 @@ class RBW_Ajax {
       wp_send_json_error(['message'=>'WooCommerce is required for payment.']);
     }
 
-    $room_id = sanitize_text_field($_POST['room_id'] ?? '');
-    $room_name = sanitize_text_field($_POST['room_name'] ?? '');
+    $rooms_raw = wp_unslash($_POST['rooms'] ?? '[]');
+    $rooms_in = json_decode($rooms_raw, true);
+    if (!is_array($rooms_in)) $rooms_in = [];
+    $room_id = '';
+    $room_name = '';
     $check_in = sanitize_text_field($_POST['check_in'] ?? '');
     $check_out = sanitize_text_field($_POST['check_out'] ?? '');
     $nights = (int)($_POST['nights'] ?? 0);
@@ -49,30 +52,65 @@ class RBW_Ajax {
     $pay_mode = sanitize_text_field($_POST['pay_mode'] ?? 'deposit');
     if ($pay_mode !== 'full') $pay_mode = 'deposit';
 
-    if (!$room_id || !$check_in || !$check_out || !$customer_name || !$customer_phone || $guests <= 0) {
+    if (!$check_in || !$check_out || !$customer_name || !$customer_phone || $guests <= 0) {
       wp_send_json_error(['message'=>'Missing required data']);
     }
 
     // Hard availability check
-    $rooms = RBW_Availability::get_available($check_in, $check_out);
-    $match = null;
-    foreach ($rooms as $r){
-      if ((string)$r['room_id'] === (string)$room_id){ $match = $r; break; }
+    $available = RBW_Availability::get_available($check_in, $check_out);
+    $by_id = [];
+    foreach ($available as $r){
+      $by_id[(string)$r['room_id']] = $r;
     }
-    if (!$match){
-      wp_send_json_error(['message'=>'Room no longer available for those dates']);
-    }
+
     $guests = max(1, $guests);
-    $ppn = (float)($match['price_per_night'] ?? 0);
-    $nights = (int)($match['nights'] ?? 0);
-    $deposit_setting = (float)($match['deposit'] ?? 0);
-    $total = $ppn * $nights * $guests;
-    $discount = ($pay_mode === 'full') ? ($total * 0.05) : 0;
-    $pay_now = ($pay_mode === 'full') ? max(0, $total - $discount) : $deposit_setting;
-    $balance = ($pay_mode === 'full') ? 0 : max(0, $total - $pay_now);
-    if (!empty($match['room_name'])) {
-      $room_name = sanitize_text_field($match['room_name']);
+    $nights = (int)($available[0]['nights'] ?? 0);
+    $total = 0;
+    $discount = 0;
+    $pay_now = 0;
+    $balance = 0;
+    $rooms_payload = [];
+    $remaining = $guests;
+
+    foreach ($rooms_in as $rsel){
+      $rid = sanitize_text_field($rsel['room_id'] ?? '');
+      if (!$rid || empty($by_id[$rid])) continue;
+      $r = $by_id[$rid];
+      $capacity = (int)($r['capacity'] ?? 1);
+      if ($capacity <= 0) $capacity = 1;
+      $assign = min($capacity, $remaining);
+      if ($assign <= 0) continue;
+      $remaining -= $assign;
+
+      $ppn = (float)($r['price_per_night'] ?? 0);
+      $deposit_setting = (float)($r['deposit'] ?? 0);
+      $booking_type = (($r['booking_type'] ?? 'per_person') === 'entire_room') ? 'entire_room' : 'per_person';
+
+      $line_total = ($booking_type === 'entire_room') ? ($ppn * $nights) : ($ppn * $nights * $assign);
+      $line_discount = ($pay_mode === 'full') ? ($line_total * 0.05) : 0;
+      $line_pay_now = ($pay_mode === 'full') ? max(0, $line_total - $line_discount) : $deposit_setting;
+      $line_balance = ($pay_mode === 'full') ? 0 : max(0, $line_total - $line_pay_now);
+
+      $total += $line_total;
+      $discount += $line_discount;
+      $pay_now += $line_pay_now;
+      $balance += $line_balance;
+
+      $rooms_payload[] = [
+        'room_id' => $rid,
+        'room_name' => sanitize_text_field($r['room_name'] ?? ''),
+        'guests' => $assign,
+        'capacity' => $capacity,
+        'booking_type' => $booking_type,
+        'price_per_night' => $ppn,
+      ];
     }
+
+    if ($remaining > 0) {
+      wp_send_json_error(['message'=>'Not enough total capacity for this guest count']);
+    }
+
+    $room_name = $rooms_payload[0]['room_name'] ?? '';
 
     // Handle optional NID upload
     $nid_url = '';
@@ -92,7 +130,7 @@ class RBW_Ajax {
       'post_status' => 'pending',
       'post_title' => sanitize_text_field($customer_name).' - '.sanitize_text_field($room_name),
       'meta_input' => [
-        '_rbw_room_id' => $room_id,
+        '_rbw_room_id' => $rooms_payload[0]['room_id'] ?? '',
         '_rbw_room_name' => $room_name,
         '_rbw_check_in' => $check_in,
         '_rbw_check_out'=> $check_out,
@@ -100,7 +138,11 @@ class RBW_Ajax {
         '_rbw_total' => $total,
         '_rbw_deposit' => $pay_now,
         '_rbw_balance' => $balance,
-        '_rbw_price_per_night' => $ppn,
+        '_rbw_price_per_night' => 0,
+        '_rbw_capacity' => 0,
+        '_rbw_rooms_needed' => count($rooms_payload),
+        '_rbw_booking_type' => 'multi',
+        '_rbw_rooms_json' => wp_json_encode($rooms_payload),
         '_rbw_customer_name' => $customer_name,
         '_rbw_customer_phone' => $customer_phone,
         '_rbw_guests' => $guests,
@@ -143,15 +185,18 @@ class RBW_Ajax {
     $cart_item_data = [
       'rbw' => [
         'booking_id' => $booking_id,
-        'room_id' => $room_id,
+        'room_id' => $rooms_payload[0]['room_id'] ?? '',
         'room_name' => $room_name,
         'check_in' => $check_in,
         'check_out'=> $check_out,
         'nights' => $nights,
-        'price_per_night' => $ppn,
+        'price_per_night' => 0,
         'total' => $total,
         'deposit' => $pay_now,
         'balance' => $balance,
+        'capacity' => 0,
+        'rooms_needed' => count($rooms_payload),
+        'booking_type' => 'multi',
         'customer_name' => $customer_name,
         'customer_phone' => $customer_phone,
         'guests' => $guests,
@@ -159,7 +204,9 @@ class RBW_Ajax {
         'pay_mode' => $pay_mode,
         'discount' => $discount,
         'pay_now' => $pay_now,
-        'deposit_setting' => $deposit_setting,
+        'deposit_setting' => 0,
+        'deposit_total' => $pay_now,
+        'rooms_json' => $rooms_payload,
       ]
     ];
 

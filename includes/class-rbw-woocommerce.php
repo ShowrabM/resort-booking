@@ -45,6 +45,23 @@ class RBW_WooCommerce {
     $item_data[] = ['name'=>'Guest Name', 'value'=>esc_html($b['customer_name'])];
     $item_data[] = ['name'=>'Phone', 'value'=>esc_html($b['customer_phone'])];
     $item_data[] = ['name'=>'Guests', 'value'=>esc_html($b['guests'])];
+    if (!empty($b['rooms_json']) && is_array($b['rooms_json'])) {
+      $list = array_map(function($r){
+        $n = $r['room_name'] ?? '';
+        $g = $r['guests'] ?? '';
+        return $n && $g ? ($n.' ('.$g.' guests)') : $n;
+      }, $b['rooms_json']);
+      $item_data[] = ['name'=>'Rooms', 'value'=>esc_html(implode(', ', array_filter($list)))];
+    }
+    if (!empty($b['booking_type'])) {
+      $item_data[] = ['name'=>'Booking Type', 'value'=>esc_html($b['booking_type'] === 'entire_room' ? 'Entire Room' : 'Per Person')];
+    }
+    if (isset($b['capacity'])) {
+      $item_data[] = ['name'=>'Room Capacity', 'value'=>esc_html($b['capacity'])];
+    }
+    if (isset($b['rooms_needed'])) {
+      $item_data[] = ['name'=>'Rooms Needed', 'value'=>esc_html($b['rooms_needed'])];
+    }
     return $item_data;
   }
 
@@ -56,7 +73,17 @@ class RBW_WooCommerce {
       $rooms = RBW_Availability::get_available($b['check_in'], $b['check_out']);
       $ok = false;
       foreach ($rooms as $r) {
-        if ((string)$r['room_id'] === (string)$b['room_id']) { $ok = true; break; }
+        if ((string)$r['room_id'] === (string)$b['room_id']) {
+          $capacity = (int)($r['capacity'] ?? 1);
+          if ($capacity <= 0) $capacity = 1;
+          $guests = (int)($b['guests'] ?? 1);
+          if ($guests <= 0) $guests = 1;
+          $rooms_needed = (int)ceil($guests / $capacity);
+          if ($rooms_needed < 1) $rooms_needed = 1;
+          $units_left = (int)($r['units_left'] ?? 0);
+          $ok = ($rooms_needed <= $units_left);
+          break;
+        }
       }
       if (!$ok){
         wc_add_notice('Sorry! The selected room is no longer available for those dates.', 'error');
@@ -85,9 +112,14 @@ class RBW_WooCommerce {
     if (isset($b['discount'])) $item->add_meta_data('_rbw_discount', (float)$b['discount'], true);
     if (isset($b['pay_now'])) $item->add_meta_data('_rbw_pay_now', (float)$b['pay_now'], true);
     if (isset($b['deposit_setting'])) $item->add_meta_data('_rbw_deposit_setting', (float)$b['deposit_setting'], true);
+    if (isset($b['deposit_total'])) $item->add_meta_data('_rbw_deposit_total', (float)$b['deposit_total'], true);
     $item->add_meta_data('_rbw_customer_name', (string)$b['customer_name'], true);
     $item->add_meta_data('_rbw_customer_phone', (string)$b['customer_phone'], true);
     $item->add_meta_data('_rbw_guests', (int)$b['guests'], true);
+    if (isset($b['booking_type'])) $item->add_meta_data('_rbw_booking_type', (string)$b['booking_type'], true);
+    if (isset($b['capacity'])) $item->add_meta_data('_rbw_capacity', (int)$b['capacity'], true);
+    if (isset($b['rooms_needed'])) $item->add_meta_data('_rbw_rooms_needed', (int)$b['rooms_needed'], true);
+    if (!empty($b['rooms_json'])) $item->add_meta_data('_rbw_rooms_json', wp_json_encode($b['rooms_json']), true);
     $item->add_meta_data('_rbw_nid_url', (string)$b['nid_url'], true);
   }
 

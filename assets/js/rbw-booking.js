@@ -239,6 +239,8 @@
       bookingForm.style.display = 'none';
       bookingRoom = null;
       currentRooms = [];
+      selectedRoomIds = new Set();
+      showAllRooms = false;
     };
 
     const close = () => {
@@ -296,7 +298,10 @@
     const payModeInputs = bookingForm.querySelectorAll('[name="rbw_pay_mode"]');
 
     let bookingRoom = null;
+    let selectedRoomIds = new Set();
+    let showAllRooms = false;
     let currentRooms = [];
+    let updateVisibleCards = () => {};
 
     const getGuests = () => {
       const v = parseInt(guestsInput.value, 10);
@@ -308,15 +313,39 @@
       return checked ? checked.value : 'deposit';
     };
 
+    const roomsNeeded = (guests, capacity) => {
+      const g = Number(guests) || 1;
+      const cap = Number(capacity) || 1;
+      return Math.max(1, Math.ceil(g / Math.max(1, cap)));
+    };
+
     const computeTotals = (room, guests, payMode) => {
       const ppn = Number(room.price_per_night) || 0;
       const n = Number(room.nights) || 0;
-      const total = ppn * n * guests;
+      const capacity = Number(room.capacity) || 1;
+      const bookingType = room.booking_type === 'entire_room' ? 'entire_room' : 'per_person';
+      const needed = roomsNeeded(guests, capacity);
+      const total = bookingType === 'entire_room' ? (ppn * n * needed) : (ppn * n * guests);
       const discount = payMode === 'full' ? total * 0.05 : 0;
-      const payNow = payMode === 'full' ? Math.max(0, total - discount) : (Number(room.deposit) || 0);
+      const depositSetting = Number(room.deposit) || 0;
+      const depositTotal = depositSetting * needed;
+      const payNow = payMode === 'full' ? Math.max(0, total - discount) : depositTotal;
       const balance = payMode === 'full' ? 0 : Math.max(0, total - payNow);
-      return { total, discount, payNow, balance };
+      return { total, discount, payNow, balance, rooms_needed: needed, capacity, deposit_total: depositTotal, booking_type: bookingType };
     };
+
+    const allocateGuests = (rooms, guests) => {
+      let remaining = guests;
+      const allocations = rooms.map(r => {
+        const cap = Number(r.capacity) || 1;
+        const assigned = Math.min(cap, remaining);
+        remaining -= assigned;
+        return { room: r, guests: assigned };
+      });
+      return { allocations, remaining };
+    };
+
+    const isMultiSelectMode = () => showAllRooms || listEl.classList.contains('rbw-need-more');
 
     const updatePricingForGuests = () => {
       const guests = getGuests();
@@ -325,21 +354,55 @@
       if (submitBtn) {
         submitBtn.textContent = payMode === 'full' ? 'Confirm & Pay Full' : 'Confirm & Pay Advance';
       }
+      const selectedRooms = currentRooms.filter(r => selectedRoomIds.has(String(r.room_id)));
+      const { allocations, remaining } = allocateGuests(selectedRooms, guests);
+      const multiMode = isMultiSelectMode() || selectedRooms.length > 1;
+      const allocMap = {};
+      allocations.forEach(a => { allocMap[String(a.room.room_id)] = a.guests; });
+
       listEl.querySelectorAll('.rbw-room[data-room]').forEach(card => {
         const roomId = card.getAttribute('data-room');
         const room = currentRooms.find(x => String(x.room_id) === String(roomId));
         if (!room) return;
-        const totals = computeTotals(room, guests, payMode);
+        let totals;
+        if (!multiMode) {
+          totals = computeTotals(room, guests, payMode);
+        } else {
+          const assigned = allocMap[String(roomId)] || 0;
+          const previewGuests = assigned > 0 ? assigned : Math.min(guests, Number(room.capacity) || 1);
+          totals = computeTotals(room, previewGuests, payMode);
+        }
         const totalEl = card.querySelector('[data-total]');
         const payNowEl = card.querySelector('[data-pay-now]');
         const balanceEl = card.querySelector('[data-balance]');
         const discountEl = card.querySelector('[data-discount]');
         const discountRow = card.querySelector('[data-discount-row]');
+        const roomsNeededEl = card.querySelector('[data-rooms-needed]');
+        const statusEl = card.querySelector('[data-rooms-status]');
         if (totalEl) totalEl.textContent = Number(totals.total).toLocaleString();
         if (payNowEl) payNowEl.textContent = Number(totals.payNow).toLocaleString();
         if (balanceEl) balanceEl.textContent = Number(totals.balance).toLocaleString();
         if (discountEl) discountEl.textContent = Number(totals.discount).toLocaleString();
         if (discountRow) discountRow.hidden = totals.discount <= 0;
+        if (roomsNeededEl) {
+          if (!multiMode) {
+            roomsNeededEl.textContent = Number(totals.rooms_needed).toLocaleString();
+          } else {
+            const assigned = allocMap[String(roomId)] || 0;
+            roomsNeededEl.textContent = assigned > 0 ? String(assigned) : '-';
+          }
+        }
+        const unitsLeft = Number(room.units_left) || 0;
+        const ok = unitsLeft >= totals.rooms_needed;
+        card.classList.toggle('rbw-room-disabled', !ok);
+        if (statusEl) {
+          if (!multiMode) {
+            statusEl.textContent = ok ? `You need ${totals.rooms_needed} room(s)` : `Not enough rooms (need ${totals.rooms_needed})`;
+          } else {
+            const assigned = allocMap[String(roomId)] || 0;
+            statusEl.textContent = assigned > 0 ? `Assigned ${assigned} guest(s)` : 'Select to add capacity';
+          }
+        }
       });
 
       const updatePayCards = (room) => {
@@ -360,27 +423,67 @@
         });
       };
 
-      if (bookingRoom) {
-        const room = currentRooms.find(x => String(x.room_id) === String(bookingRoom.room_id)) || bookingRoom;
-        const totals = computeTotals(room, guests, payMode);
-        bookingRoom.total = totals.total;
-        bookingRoom.deposit = totals.payNow;
-        bookingRoom.balance = totals.balance;
-        bookingRoom.discount = totals.discount;
-        bookingRoom.pay_mode = payMode;
-        updatePayCards(room);
+      if (selectedRooms.length) {
+        if (remaining > 0) {
+          if (submitBtn) submitBtn.disabled = true;
+          showAllRooms = true;
+          listEl.classList.add('rbw-need-more');
+          showAlert('err', `You need to choose more rooms for ${remaining} more guest(s).`);
+          updateVisibleCards();
+          return;
+        }
+
+        let total = 0;
+        let discount = 0;
+        let payNow = 0;
+        let balance = 0;
+        const roomsPayload = [];
+        allocations.forEach(({ room, guests: g }) => {
+          const totals = computeTotals(room, g, payMode);
+          total += totals.total;
+          discount += totals.discount;
+          payNow += totals.payNow;
+          balance += totals.balance;
+          roomsPayload.push({
+            room_id: room.room_id,
+            room_name: room.room_name,
+            guests: g,
+            capacity: room.capacity,
+            booking_type: totals.booking_type
+          });
+        });
+
+       
+        showAllRooms = false;
+        listEl.classList.remove('rbw-need-more');
+        showAlert('ok', `You need ${selectedRooms.length} room(s) for ${guests} guest(s).`);
+        bookingRoom = {
+          rooms: roomsPayload,
+          total,
+          discount,
+          deposit: payNow,
+          balance,
+          pay_mode: payMode
+        };
+        updatePayCards(selectedRooms[0]);
+        updateVisibleCards();
       } else {
+        showAllRooms = false;
+        listEl.classList.remove('rbw-need-more');
+        const submitBtn = bookingForm.querySelector('.rbw-submit');
+        if (submitBtn) submitBtn.disabled = true;
+        if (selectedRoomIds.size === 0) {
+          showAlert('err', 'Please select a room.');
+        }
+        updateVisibleCards();
         updatePayCards(currentRooms[0]);
       }
     };
 
-    const openBookingForm = (room) => {
-      const guests = getGuests();
-      const payMode = getPayMode();
-      const totals = computeTotals(room, guests, payMode);
-      bookingRoom = { ...room, total: totals.total, deposit: totals.payNow, balance: totals.balance, discount: totals.discount, pay_mode: payMode };
+    const openBookingForm = () => {
       bookingForm.style.display = 'block';
       bookingForm.scrollIntoView({behavior:'smooth', block:'center'});
+      updatePricingForGuests();
     };
 
     bookingForm.querySelector('.rbw-cancel').addEventListener('click', () => {
@@ -408,16 +511,13 @@
       const fd = new FormData();
       fd.append('action', 'rbw_create_booking');
       fd.append('nonce', RBW.nonce);
-      fd.append('room_id', bookingRoom.room_id);
-      fd.append('room_name', bookingRoom.room_name);
+      fd.append('rooms', JSON.stringify(bookingRoom.rooms || []));
       fd.append('check_in', toISO(inEl.value));
       fd.append('check_out', toISO(outEl.value));
-      fd.append('nights', bookingRoom.nights);
-      const totals = computeTotals(bookingRoom, guests, payMode);
-      fd.append('total', totals.total);
-      fd.append('deposit', totals.payNow);
-      fd.append('balance', totals.balance);
-      fd.append('price_per_night', bookingRoom.price_per_night);
+      fd.append('nights', currentRooms[0]?.nights || 0);
+      fd.append('total', bookingRoom.total || 0);
+      fd.append('deposit', bookingRoom.deposit || 0);
+      fd.append('balance', bookingRoom.balance || 0);
       fd.append('customer_name', name);
       fd.append('customer_phone', phone);
       fd.append('guests', guests);
@@ -456,48 +556,134 @@
       const displayIn = formatDisplay(checkIn);
       const displayOut = formatDisplay(checkOut);
       currentRooms = rooms.slice();
-      listEl.innerHTML = rooms.map((r, idx) => `
-        <div class="rbw-room ${idx === 0 ? 'active' : ''}" data-room="${r.room_id}">
+      const availableRooms = rooms.filter(r => (Number(r.units_left) || 0) > 0);
+      if (!availableRooms.length) {
+        listEl.innerHTML = '';
+        showAlert('err', `Sorry, we are not available from ${displayIn} to ${displayOut}.`);
+        return;
+      }
+      listEl.innerHTML = `
+        <div class="rbw-room-chips" data-rbw-chips></div>
+      ` + rooms.map((r, idx) => `
+        <div class="rbw-room ${idx === 0 ? 'active' : ''} ${r.units_left <= 0 ? 'rbw-room-disabled' : ''}" data-room="${r.room_id}">
           <div class="rbw-room-top">
             <h4>${r.room_name}</h4>
-            <span class="rbw-badge">Available: ${r.units_left}</span>
+            ${r.units_left > 0 ? `<span class="rbw-badge">Available: ${r.units_left}</span>` : `<span class="rbw-badge rbw-badge-full">Fully Booked</span>`}
           </div>
           <div class="rbw-meta">
             <div>Per night: <b>${Number(r.price_per_night).toLocaleString()}</b></div>
             <div>Nights: <b>${Number(r.nights).toLocaleString()}</b></div>
+            <div>Capacity: <b>${Number(r.capacity || 1).toLocaleString()}</b></div>
+            <div>Booking Type: <b>${r.booking_type === 'entire_room' ? 'Entire Room' : 'Per Person'}</b></div>
+            <div data-rooms-status>Need 1 room(s)</div>
             <div>Total: <b data-total>${Number(r.total).toLocaleString()}</b></div>
             <div data-discount-row hidden>Discount: <b data-discount>0</b></div>
             <div>Pay Now: <b data-pay-now>${Number(r.deposit).toLocaleString()}</b></div>
             <div>Balance: <b data-balance>${Number(r.balance).toLocaleString()}</b></div>
+            <div>Rooms Needed: <b data-rooms-needed>1</b></div>
             <div>Dates: <b>${displayIn} -> ${displayOut}</b></div>
           </div>
         </div>
       `).join('');
 
-      const setActive = (roomId) => {
-        listEl.querySelectorAll('.rbw-room').forEach(el => el.classList.remove('active'));
-        const activeEl = listEl.querySelector(`.rbw-room[data-room="${roomId}"]`);
-        if (activeEl) activeEl.classList.add('active');
+      const chipsEl = listEl.querySelector('[data-rbw-chips]');
+      if (chipsEl) {
+        chipsEl.innerHTML = rooms.map(r => `
+          <button type="button" class="rbw-chip ${r.units_left <= 0 ? 'disabled' : ''}" data-chip="${r.room_id}" ${r.units_left <= 0 ? 'disabled' : ''}>${r.room_name}</button>
+        `).join('');
+      }
+
+      updateVisibleCards = () => {
+        const noneSelected = selectedRoomIds.size === 0;
+        listEl.querySelectorAll('.rbw-room[data-room]').forEach(card => {
+          const id = card.getAttribute('data-room');
+          if (noneSelected) {
+            card.classList.remove('rbw-room-hidden');
+            return;
+          }
+          const shouldHide = !showAllRooms && !selectedRoomIds.has(String(id));
+          card.classList.toggle('rbw-room-hidden', shouldHide);
+        });
       };
+
+      if (chipsEl) {
+        chipsEl.querySelectorAll('[data-chip]').forEach(chip => {
+          chip.addEventListener('click', () => {
+            if (chip.classList.contains('disabled')) {
+              showAlert('err', 'Already booked.');
+              return;
+            }
+            const roomId = chip.getAttribute('data-chip');
+            if (!roomId) return;
+            if (isMultiSelectMode()) {
+              if (selectedRoomIds.has(String(roomId))) {
+                selectedRoomIds.delete(String(roomId));
+                chip.classList.remove('active');
+              } else {
+                selectedRoomIds.add(String(roomId));
+                chip.classList.add('active');
+              }
+            } else {
+              selectedRoomIds = new Set([String(roomId)]);
+              chipsEl.querySelectorAll('[data-chip]').forEach(c => c.classList.remove('active'));
+              chip.classList.add('active');
+            }
+            updateVisibleCards();
+            openBookingForm();
+          });
+        });
+      }
 
       listEl.querySelectorAll('.rbw-room[data-room]').forEach(card => {
         card.addEventListener('click', () => {
           clearAlert();
+          if (card.classList.contains('rbw-room-disabled')) {
+            showAlert('err', 'Already booked.');
+            return;
+          }
           const roomId = card.getAttribute('data-room');
           const match = rooms.find(x => String(x.room_id) === String(roomId)) || null;
           if (!match) {
             showAlert('err','Room not found.');
             return;
           }
-          setActive(roomId);
-          openBookingForm(match);
+          if (isMultiSelectMode()) {
+            if (selectedRoomIds.has(String(roomId))) {
+              selectedRoomIds.delete(String(roomId));
+              card.classList.remove('active');
+            } else {
+              selectedRoomIds.add(String(roomId));
+              card.classList.add('active');
+            }
+          } else {
+            selectedRoomIds = new Set([String(roomId)]);
+            listEl.querySelectorAll('.rbw-room[data-room]').forEach(el => el.classList.remove('active'));
+            card.classList.add('active');
+          }
+          if (chipsEl) {
+            chipsEl.querySelectorAll('[data-chip]').forEach(chip => {
+              const id = chip.getAttribute('data-chip');
+              chip.classList.toggle('active', selectedRoomIds.has(String(id)));
+            });
+          }
+          updateVisibleCards();
+          openBookingForm();
         });
       });
 
-      // Auto-open form with the first room
-      if (rooms[0]) {
-        openBookingForm(rooms[0]);
+      // Auto-select first room
+      const firstAvailable = rooms.find(r => (Number(r.units_left) || 0) > 0);
+      if (firstAvailable) {
+        selectedRoomIds = new Set([String(firstAvailable.room_id)]);
+        const firstCard = listEl.querySelector(`.rbw-room[data-room="${firstAvailable.room_id}"]`);
+        if (firstCard) firstCard.classList.add('active');
+        if (chipsEl) {
+          const firstChip = chipsEl.querySelector(`[data-chip="${firstAvailable.room_id}"]`);
+          if (firstChip) firstChip.classList.add('active');
+        }
+        updateVisibleCards();
       }
+      bookingForm.style.display = 'block';
       updatePricingForGuests();
     };
 
@@ -506,6 +692,8 @@
       listEl.innerHTML = '';
       bookingForm.style.display = 'none';
       bookingRoom = null;
+      selectedRoomIds = new Set();
+      showAllRooms = false;
 
       const checkInRaw = inEl.value;
       const checkOutRaw = outEl.value;
@@ -522,8 +710,8 @@
       fd.append('nonce', RBW.nonce);
       fd.append('check_in', checkInISO);
       fd.append('check_out', checkOutISO);
-      const roomFilter = widget.getAttribute('data-rbw-room');
-      if(roomFilter) fd.append('room_id', roomFilter);
+      const groupFilter = widget.getAttribute('data-rbw-group');
+      if(groupFilter) fd.append('group', groupFilter);
 
       try{
         const res = await fetchWithTimeout(RBW.ajaxUrl, { method:'POST', credentials:'same-origin', body: fd });

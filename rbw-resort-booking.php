@@ -87,12 +87,19 @@ add_action('rbw_maybe_cancel_booking', function($booking_id){
 });
 
 
-// Primary shortcode: [resort_booking room="ROOM_ID"]
+// Primary shortcode: [resort_booking group="vip"]
 add_shortcode('resort_booking', function($atts = []){
+  $raw_room = '';
+  if (is_array($atts) && isset($atts['room'])) {
+    $raw_room = trim((string)$atts['room']);
+  }
+  if ($raw_room !== '') {
+    return '<div class="rbw-error">The room parameter is no longer supported. Use group="..." or [resort_booking].</div>';
+  }
   $atts = shortcode_atts([
-    'room' => '',
+    'group' => '',
   ], $atts, 'resort_booking');
-  $room_id = trim($atts['room']);
+  $group = trim($atts['group']);
 
   wp_enqueue_style('rbw-booking');
   wp_enqueue_script('rbw-booking');
@@ -100,7 +107,8 @@ add_shortcode('resort_booking', function($atts = []){
 $id = uniqid('rbw_', true);
 
 ob_start(); ?>
-  <div class="rbw-wrap" data-rbw-widget="<?php echo esc_attr($id); ?>" <?php if($room_id!=='') echo 'data-rbw-room="'.esc_attr($room_id).'"'; ?>>
+  <div class="rbw-wrap" data-rbw-widget="<?php echo esc_attr($id); ?>"
+    <?php if($group!=='') echo 'data-rbw-group="'.esc_attr($group).'"'; ?>>
     <button type="button" class="rbw-btn" data-rbw-open>Book Now</button>
 
     <div class="rbw-backdrop" data-rbw-backdrop aria-hidden="true">

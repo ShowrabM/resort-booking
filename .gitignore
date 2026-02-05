@@ -1,0 +1,15 @@
+# OS junk
+Thumbs.db
+Desktop.ini
+
+# Logs
+*.log
+
+# Local dev
+.vscode/
+.idea/
+.DS_Store
+
+# WordPress
+wp-config.php
+wp-content/uploads/
