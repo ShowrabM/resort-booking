@@ -4,6 +4,14 @@ This plugin provides a simple room booking flow with WooCommerce payment.
 
 ## Changelog
 
+### 1.0.3
+- Booking summary UI redesigned with sectioned cards and icons.
+- Currency formatting added using WooCommerce settings.
+- Summary includes room count, guest count, and nights.
+- Responsive tweaks for summary layout on mobile.
+- Improved room list ordering (available first) and visual state for booked rooms.
+- Selection logic and payment display refinements for clarity.
+
 ### 1.0.2
 - Booking UI: improved colors, selection highlighting, and payment summary.
 - Full payment: strong 5% OFF visual highlight when selected.
@@ -14,7 +22,7 @@ This plugin provides a simple room booking flow with WooCommerce payment.
 - Admin: added CSV export for booking details.
 - Order meta display cleaned and more user-friendly.
 
-Version: 1.0.2
+Version: 1.0.3
 
 ## Structure
 
