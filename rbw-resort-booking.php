@@ -3,7 +3,7 @@
  * Plugin Name: Resort Booking
  * Plugin URI: https://onvirtualworld.com
  * Description: A plugin to manage resort bookings.
- * Version: 1.0.0
+ * Version: 1.0.2
  * Author: Showrab Mojumdar
  * Author URI: https://github.com/ShowrabM/resort-booking
  * License: GPL2
@@ -12,7 +12,7 @@
 
 if (!defined('ABSPATH')) exit;
 
-define('RBW_VERSION', '1.0.0');
+define('RBW_VERSION', '1.0.2');
 define('RBW_PLUGIN_DIR', plugin_dir_path(__FILE__));
 define('RBW_PLUGIN_URL', plugin_dir_url(__FILE__));
 

@@ -5,6 +5,7 @@ class RBW_WooCommerce {
   public static function init(){
     add_action('woocommerce_before_calculate_totals', [__CLASS__, 'set_deposit_price'], 20);
     add_filter('woocommerce_get_item_data', [__CLASS__, 'show_cart_meta'], 10, 2);
+    add_filter('woocommerce_order_item_get_formatted_meta_data', [__CLASS__, 'format_order_item_meta'], 10, 2);
     add_action('woocommerce_checkout_process', [__CLASS__, 'hard_check']);
     add_action('woocommerce_checkout_create_order_line_item', [__CLASS__, 'save_meta'], 10, 4);
     add_action('woocommerce_payment_complete', [__CLASS__, 'confirm_booking']);
@@ -42,6 +43,7 @@ class RBW_WooCommerce {
     $item_data[] = ['name'=>'Pay Now', 'value'=>wc_price($pay_now)];
     $item_data[] = ['name'=>'Balance Due', 'value'=>wc_price((float)$b['balance'])];
     $item_data[] = ['name'=>'Payment Mode', 'value'=>esc_html($pay_mode === 'full' ? 'Full (5% off)' : 'Advance payment')];
+    $item_data[] = ['name'=>'Advance Rule', 'value'=>esc_html('1 room = pay 1000 now. 2+ rooms = pay at least 50% now.')];
     $item_data[] = ['name'=>'Guest Name', 'value'=>esc_html($b['customer_name'])];
     $item_data[] = ['name'=>'Phone', 'value'=>esc_html($b['customer_phone'])];
     $item_data[] = ['name'=>'Guests', 'value'=>esc_html($b['guests'])];
@@ -121,6 +123,89 @@ class RBW_WooCommerce {
     if (isset($b['rooms_needed'])) $item->add_meta_data('_rbw_rooms_needed', (int)$b['rooms_needed'], true);
     if (!empty($b['rooms_json'])) $item->add_meta_data('_rbw_rooms_json', wp_json_encode($b['rooms_json']), true);
     $item->add_meta_data('_rbw_nid_url', (string)$b['nid_url'], true);
+  }
+
+  public static function format_order_item_meta($formatted_meta, $item){
+    $room_name = $item->get_meta('_rbw_room_name', true);
+    if (empty($room_name)) return $formatted_meta;
+
+    $add = function(&$rows, $label, $value){
+      if ($value === '' || $value === null) return;
+      $rows[] = (object)[
+        'key' => $label,
+        'display_key' => $label,
+        'value' => $value,
+        'display_value' => $value,
+      ];
+    };
+
+    $rows = [];
+    $check_in = (string)$item->get_meta('_rbw_check_in', true);
+    $check_out = (string)$item->get_meta('_rbw_check_out', true);
+    $nights = (int)$item->get_meta('_rbw_nights', true);
+    $total = (float)$item->get_meta('_rbw_total', true);
+    $discount = (float)$item->get_meta('_rbw_discount', true);
+    $pay_now = $item->get_meta('_rbw_pay_now', true);
+    $deposit = (float)$item->get_meta('_rbw_deposit', true);
+    $balance = (float)$item->get_meta('_rbw_balance', true);
+    $pay_mode = (string)$item->get_meta('_rbw_pay_mode', true);
+    $customer_name = (string)$item->get_meta('_rbw_customer_name', true);
+    $customer_phone = (string)$item->get_meta('_rbw_customer_phone', true);
+    $guests = (int)$item->get_meta('_rbw_guests', true);
+    $booking_type = (string)$item->get_meta('_rbw_booking_type', true);
+    $capacity = $item->get_meta('_rbw_capacity', true);
+    $rooms_needed = $item->get_meta('_rbw_rooms_needed', true);
+    $rooms_json = $item->get_meta('_rbw_rooms_json', true);
+
+    $add($rows, 'Room', esc_html($room_name));
+    if ($check_in || $check_out) {
+      $add($rows, 'Dates', esc_html(trim($check_in.' -> '.$check_out)));
+    }
+    if ($nights > 0) $add($rows, 'Nights', esc_html($nights));
+    if ($total > 0) $add($rows, 'Total', wc_price($total));
+    if ($discount > 0) $add($rows, 'Discount', wc_price($discount));
+    $pay_now_amount = ($pay_now !== '' && $pay_now !== null) ? (float)$pay_now : $deposit;
+    if ($pay_now_amount > 0) $add($rows, 'Pay Now', wc_price($pay_now_amount));
+    if ($balance > 0) $add($rows, 'Balance Due', wc_price($balance));
+    if (!empty($pay_mode)) {
+      $add($rows, 'Payment Mode', esc_html($pay_mode === 'full' ? 'Full (5% off)' : 'Advance payment'));
+    }
+    $add($rows, 'Advance Rule', esc_html('1 room = pay 1000 now. 2+ rooms = pay at least 50% now.'));
+    if (!empty($customer_name)) $add($rows, 'Guest Name', esc_html($customer_name));
+    if (!empty($customer_phone)) $add($rows, 'Phone', esc_html($customer_phone));
+    if ($guests > 0) $add($rows, 'Guests', esc_html($guests));
+
+    if (!empty($rooms_json)) {
+      if (is_string($rooms_json)) {
+        $decoded = json_decode($rooms_json, true);
+        if (json_last_error() === JSON_ERROR_NONE) $rooms_json = $decoded;
+      }
+      if (is_array($rooms_json)) {
+        $list = array_map(function($r){
+          $n = $r['room_name'] ?? '';
+          $g = $r['guests'] ?? '';
+          return $n && $g ? ($n.' ('.$g.' guests)') : $n;
+        }, $rooms_json);
+        $add($rows, 'Rooms', esc_html(implode(', ', array_filter($list))));
+      }
+    }
+    if (!empty($booking_type)) {
+      $add($rows, 'Booking Type', esc_html($booking_type === 'entire_room' ? 'Entire Room' : 'Per Person'));
+    }
+    if ($capacity !== '' && $capacity !== null) {
+      $add($rows, 'Room Capacity', esc_html($capacity));
+    }
+    if ($rooms_needed !== '' && $rooms_needed !== null) {
+      $add($rows, 'Rooms Needed', esc_html($rooms_needed));
+    }
+
+    $filtered = [];
+    foreach ($formatted_meta as $meta) {
+      if (!empty($meta->key) && strpos($meta->key, '_rbw_') === 0) continue;
+      $filtered[] = $meta;
+    }
+
+    return array_merge($filtered, $rows);
   }
 
   // Display product name as room name in cart/checkout

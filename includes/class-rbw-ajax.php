@@ -111,9 +111,27 @@ class RBW_Ajax {
     }
 
     $room_name = $rooms_payload[0]['room_name'] ?? '';
+    $rooms_count = count($rooms_payload);
 
-    // Handle optional NID upload
+    // Enforce advance payment policy
+    if ($pay_mode === 'deposit') {
+      if ($rooms_count > 1) {
+        $min_advance = $total * 0.5;
+        $pay_now = max($pay_now, $min_advance);
+      } elseif ($rooms_count === 1) {
+        $pay_now = min($total, 1000);
+      }
+      $balance = max(0, $total - $pay_now);
+    }
+
+    // Handle required NID upload
     $nid_url = '';
+    if (empty($_FILES['nid']) || !is_array($_FILES['nid'])) {
+      wp_send_json_error(['message'=>'Please upload NID, Driving License, or Card.']);
+    }
+    if ($_FILES['nid']['error'] !== UPLOAD_ERR_OK) {
+      wp_send_json_error(['message'=>'NID upload failed. Please try again.']);
+    }
     if (!empty($_FILES['nid']) && is_array($_FILES['nid']) && $_FILES['nid']['error'] === UPLOAD_ERR_OK){
       require_once ABSPATH . 'wp-admin/includes/file.php';
       $upload = wp_handle_upload($_FILES['nid'], ['test_form' => false]);

@@ -55,6 +55,9 @@
     return Math.max(0, Math.round((B - A) / 86400000));
   };
 
+  const SINGLE_ADVANCE = 1000;
+  const MULTI_MIN_ADVANCE_RATE = 0.5;
+
   widgets.forEach(widget => {
     const q = sel => widget.querySelector(sel);
 
@@ -123,6 +126,11 @@
     const setInputsFromState = () => {
       inEl.value = calState.checkIn || '';
       outEl.value = calState.checkOut || '';
+    };
+
+    const setCalendarVisible = (visible) => {
+      if (!calEl) return;
+      calEl.style.display = visible ? 'block' : 'none';
     };
 
     const isoFromParts = (y, m, d) => {
@@ -217,6 +225,7 @@
       }
       setInputsFromState();
       renderCalendar();
+      setCalendarVisible(true);
     }
 
     const showAlert = (type, msg) => {
@@ -241,6 +250,7 @@
       currentRooms = [];
       selectedRoomIds = new Set();
       showAllRooms = false;
+      setCalendarVisible(true);
     };
 
     const close = () => {
@@ -251,6 +261,8 @@
     openBtn.addEventListener('click', open);
     if (closeBtn) closeBtn.addEventListener('click', close);
     backdrop.addEventListener('click', (e) => { if (e.target === backdrop) close(); });
+    inEl.addEventListener('click', () => setCalendarVisible(true));
+    outEl.addEventListener('click', () => setCalendarVisible(true));
 
     // Booking form (embedded inside modal)
     const bookingForm = document.createElement('div');
@@ -261,10 +273,11 @@
         <label>Your Name*<input type="text" name="rbw_name" required></label>
         <label>Mobile Number*<input type="number" inputmode="numeric" pattern="[0-9]*" name="rbw_phone" required></label>
         <label>Number of Guests*<input type="number" min="1" value="1" name="rbw_guests" required></label>
-        <label>NID(optional, take photo)<input type="file" accept="image/*" capture="environment" name="rbw_nid"></label>
+        <label>NID, Driving License, Card*<input type="file" accept="image/*" capture="environment" name="rbw_nid" required></label>
       </div>
       <div class="rbw-paymode">
         <div class="rbw-paymode-title">Payment</div>
+        <div class="rbw-paymode-rule">Advance rule: 1 room = pay 1000 now. 2+ rooms = pay at least 50% now.</div>
         <div class="rbw-paymode-grid">
           <label class="rbw-paycard" data-pay-card="deposit">
             <input type="radio" name="rbw_pay_mode" value="deposit" checked>
@@ -284,6 +297,25 @@
           </label>
         </div>
         <div class="rbw-paymode-note">Secure payment. Your details are protected with SSL encryption.</div>
+      </div>
+      <div class="rbw-summary" data-rbw-summary>
+        <div class="rbw-summary-row">
+          <span>Total Bill</span>
+          <b data-sum-total>0</b>
+        </div>
+        <div class="rbw-summary-row">
+          <span>Pay Now</span>
+          <b data-sum-pay>0</b>
+        </div>
+        <div class="rbw-summary-row">
+          <span>Balance Due</span>
+          <b data-sum-balance>0</b>
+        </div>
+        <div class="rbw-summary-row" data-sum-discount-row hidden>
+          <span>Discount</span>
+          <b data-sum-discount>0</b>
+        </div>
+        <div class="rbw-summary-note" data-sum-note>Select a room to see your total.</div>
       </div>
       <div class="rbw-form-actions">
         <button type="button" class="rbw-cancel">Cancel</button>
@@ -334,15 +366,64 @@
       return { total, discount, payNow, balance, rooms_needed: needed, capacity, deposit_total: depositTotal, booking_type: bookingType };
     };
 
+    const applyAdvancePolicy = (total, payNow, roomsCount, payMode) => {
+      if (payMode === 'full') return { payNow, balance: 0 };
+      let adjusted = payNow;
+      if (roomsCount > 1) {
+        adjusted = Math.max(payNow, total * MULTI_MIN_ADVANCE_RATE);
+      } else if (roomsCount === 1) {
+        adjusted = Math.min(total, SINGLE_ADVANCE);
+      }
+      const balance = Math.max(0, total - adjusted);
+      return { payNow: adjusted, balance };
+    };
+
     const allocateGuests = (rooms, guests) => {
-      let remaining = guests;
-      const allocations = rooms.map(r => {
-        const cap = Number(r.capacity) || 1;
-        const assigned = Math.min(cap, remaining);
-        remaining -= assigned;
-        return { room: r, guests: assigned };
+      const count = rooms.length;
+      if (count === 0) return { allocations: [], remaining: guests };
+      if (guests < count) return { allocations: [], remaining: guests - count };
+
+      const capacities = rooms.map(r => Math.max(1, Number(r.capacity) || 1));
+      const base = Math.floor(guests / count);
+      let extra = guests % count;
+
+      let allocations = rooms.map((room, idx) => {
+        let assigned = base + (extra > 0 ? 1 : 0);
+        if (extra > 0) extra -= 1;
+        if (assigned > capacities[idx]) {
+          assigned = capacities[idx];
+        }
+        return { room, guests: assigned };
       });
+
+      let assignedTotal = allocations.reduce((s, a) => s + a.guests, 0);
+      let remaining = guests - assignedTotal;
+
+      if (remaining > 0) {
+        let guard = 0;
+        while (remaining > 0 && guard < 1000) {
+          let progressed = false;
+          for (let i = 0; i < allocations.length && remaining > 0; i++) {
+            const cap = capacities[i];
+            if (allocations[i].guests < cap) {
+              allocations[i].guests += 1;
+              remaining -= 1;
+              progressed = true;
+            }
+          }
+          if (!progressed) break;
+          guard++;
+        }
+      }
+
       return { allocations, remaining };
+    };
+
+    const totalSelectedCapacity = (rooms) => {
+      return rooms.reduce((sum, r) => {
+        const cap = Number(r.capacity) || 1;
+        return sum + Math.max(1, cap);
+      }, 0);
     };
 
     const isMultiSelectMode = () => showAllRooms || listEl.classList.contains('rbw-need-more');
@@ -351,10 +432,20 @@
       const guests = getGuests();
       const payMode = getPayMode();
       const submitBtn = bookingForm.querySelector('.rbw-submit');
+      const sumTotalEl = bookingForm.querySelector('[data-sum-total]');
+      const sumPayEl = bookingForm.querySelector('[data-sum-pay]');
+      const sumBalEl = bookingForm.querySelector('[data-sum-balance]');
+      const sumDiscEl = bookingForm.querySelector('[data-sum-discount]');
+      const sumDiscRow = bookingForm.querySelector('[data-sum-discount-row]');
+      const sumNoteEl = bookingForm.querySelector('[data-sum-note]');
       if (submitBtn) {
         submitBtn.textContent = payMode === 'full' ? 'Confirm & Pay Full' : 'Confirm & Pay Advance';
       }
       const selectedRooms = currentRooms.filter(r => selectedRoomIds.has(String(r.room_id)));
+      if (selectedRooms.length) {
+        const capSum = totalSelectedCapacity(selectedRooms);
+        if (guests > capSum) showAllRooms = true;
+      }
       const { allocations, remaining } = allocateGuests(selectedRooms, guests);
       const multiMode = isMultiSelectMode() || selectedRooms.length > 1;
       const allocMap = {};
@@ -367,6 +458,11 @@
         let totals;
         if (!multiMode) {
           totals = computeTotals(room, guests, payMode);
+          if (payMode !== 'full') {
+            const adj = applyAdvancePolicy(totals.total, totals.payNow, 1, payMode);
+            totals.payNow = adj.payNow;
+            totals.balance = adj.balance;
+          }
         } else {
           const assigned = allocMap[String(roomId)] || 0;
           const previewGuests = assigned > 0 ? assigned : Math.min(guests, Number(room.capacity) || 1);
@@ -393,7 +489,7 @@
           }
         }
         const unitsLeft = Number(room.units_left) || 0;
-        const ok = unitsLeft >= totals.rooms_needed;
+        const ok = multiMode ? (unitsLeft > 0) : (unitsLeft >= totals.rooms_needed);
         card.classList.toggle('rbw-room-disabled', !ok);
         if (statusEl) {
           if (!multiMode) {
@@ -405,22 +501,39 @@
         }
       });
 
-      const updatePayCards = (room) => {
-        if (!room) return;
-        const dep = computeTotals(room, guests, 'deposit');
-        const full = computeTotals(room, guests, 'full');
+      const updatePayCards = (depTotals, fullTotals) => {
+        if (!depTotals || !fullTotals) return;
         const advPay = bookingForm.querySelector('[data-adv-pay]');
         const advBal = bookingForm.querySelector('[data-adv-balance]');
         const fullPay = bookingForm.querySelector('[data-full-pay]');
         const fullSave = bookingForm.querySelector('[data-full-save]');
-        if (advPay) advPay.textContent = Number(dep.payNow).toLocaleString();
-        if (advBal) advBal.textContent = Number(dep.balance).toLocaleString();
-        if (fullPay) fullPay.textContent = Number(full.payNow).toLocaleString();
-        if (fullSave) fullSave.textContent = Number(full.discount).toLocaleString();
+        if (advPay) advPay.textContent = Number(depTotals.payNow).toLocaleString();
+        if (advBal) advBal.textContent = Number(depTotals.balance).toLocaleString();
+        if (fullPay) fullPay.textContent = Number(fullTotals.payNow).toLocaleString();
+        if (fullSave) fullSave.textContent = Number(fullTotals.discount).toLocaleString();
         bookingForm.querySelectorAll('.rbw-paycard').forEach(card => {
           const mode = card.getAttribute('data-pay-card');
           card.classList.toggle('active', mode === payMode);
         });
+      };
+
+      const updateSummary = (total, payNow, balance, discount, roomsCount, mode) => {
+        if (sumTotalEl) sumTotalEl.textContent = Number(total || 0).toLocaleString();
+        if (sumPayEl) sumPayEl.textContent = Number(payNow || 0).toLocaleString();
+        if (sumBalEl) sumBalEl.textContent = Number(balance || 0).toLocaleString();
+        if (sumDiscEl) sumDiscEl.textContent = Number(discount || 0).toLocaleString();
+        if (sumDiscRow) sumDiscRow.hidden = !(Number(discount) > 0);
+        if (sumNoteEl) {
+          if (!roomsCount) {
+            sumNoteEl.textContent = 'Select a room to see your total.';
+          } else if (mode === 'full') {
+            sumNoteEl.textContent = 'Full payment selected (5% discount).';
+          } else if (roomsCount > 1) {
+            sumNoteEl.textContent = 'Advance payment selected (min 50% for multiple rooms).';
+          } else {
+            sumNoteEl.textContent = 'Advance payment selected (1000 for single room).';
+          }
+        }
       };
 
       if (selectedRooms.length) {
@@ -428,44 +541,76 @@
           if (submitBtn) submitBtn.disabled = true;
           showAllRooms = true;
           listEl.classList.add('rbw-need-more');
-          showAlert('err', `You need to choose more rooms for ${remaining} more guest(s).`);
+          if (remaining < 0) {
+            showAlert('err', 'You selected more rooms than guests. Reduce rooms or increase guests.');
+          } else {
+            showAlert('err', `You need to choose more rooms for ${remaining} more guest(s).`);
+          }
+          setCalendarVisible(false);
+          updateSummary(0, 0, 0, 0, 0, payMode);
           updateVisibleCards();
           return;
         }
 
-        let total = 0;
-        let discount = 0;
-        let payNow = 0;
-        let balance = 0;
+        let totalDep = 0;
+        let discountDep = 0;
+        let payNowDep = 0;
+        let balanceDep = 0;
+        let totalFull = 0;
+        let discountFull = 0;
+        let payNowFull = 0;
+        let balanceFull = 0;
         const roomsPayload = [];
         allocations.forEach(({ room, guests: g }) => {
-          const totals = computeTotals(room, g, payMode);
-          total += totals.total;
-          discount += totals.discount;
-          payNow += totals.payNow;
-          balance += totals.balance;
+          if (g <= 0) return;
+          const totalsDep = computeTotals(room, g, 'deposit');
+          const totalsFull = computeTotals(room, g, 'full');
+          totalDep += totalsDep.total;
+          discountDep += totalsDep.discount;
+          payNowDep += totalsDep.payNow;
+          balanceDep += totalsDep.balance;
+          totalFull += totalsFull.total;
+          discountFull += totalsFull.discount;
+          payNowFull += totalsFull.payNow;
+          balanceFull += totalsFull.balance;
           roomsPayload.push({
             room_id: room.room_id,
             room_name: room.room_name,
             guests: g,
             capacity: room.capacity,
-            booking_type: totals.booking_type
+            booking_type: totalsDep.booking_type
           });
         });
+
+        const depAdjusted = applyAdvancePolicy(totalDep, payNowDep, selectedRooms.length, 'deposit');
+        payNowDep = depAdjusted.payNow;
+        balanceDep = depAdjusted.balance;
 
        
         showAllRooms = false;
         listEl.classList.remove('rbw-need-more');
         showAlert('ok', `You need ${selectedRooms.length} room(s) for ${guests} guest(s).`);
+        setCalendarVisible(selectedRooms.length <= 1);
         bookingRoom = {
           rooms: roomsPayload,
-          total,
-          discount,
-          deposit: payNow,
-          balance,
+          total: payMode === 'full' ? totalFull : totalDep,
+          discount: payMode === 'full' ? discountFull : discountDep,
+          deposit: payMode === 'full' ? payNowFull : payNowDep,
+          balance: payMode === 'full' ? balanceFull : balanceDep,
           pay_mode: payMode
         };
-        updatePayCards(selectedRooms[0]);
+        updatePayCards(
+          { payNow: payNowDep, balance: balanceDep },
+          { payNow: payNowFull, discount: discountFull }
+        );
+        updateSummary(
+          bookingRoom.total,
+          bookingRoom.deposit,
+          bookingRoom.balance,
+          bookingRoom.discount,
+          selectedRooms.length,
+          payMode
+        );
         updateVisibleCards();
       } else {
         showAllRooms = false;
@@ -475,14 +620,23 @@
         if (selectedRoomIds.size === 0) {
           showAlert('err', 'Please select a room.');
         }
+        setCalendarVisible(true);
         updateVisibleCards();
-        updatePayCards(currentRooms[0]);
+        if (currentRooms[0]) {
+          const dep = computeTotals(currentRooms[0], guests, 'deposit');
+          const depAdj = applyAdvancePolicy(dep.total, dep.payNow, 1, 'deposit');
+          const full = computeTotals(currentRooms[0], guests, 'full');
+          updatePayCards(
+            { payNow: depAdj.payNow, balance: depAdj.balance },
+            { payNow: full.payNow, discount: full.discount }
+          );
+        }
+        updateSummary(0, 0, 0, 0, 0, payMode);
       }
     };
 
     const openBookingForm = () => {
       bookingForm.style.display = 'block';
-      bookingForm.scrollIntoView({behavior:'smooth', block:'center'});
       updatePricingForGuests();
     };
 
@@ -505,6 +659,10 @@
       const nidFile= bookingForm.querySelector('[name="rbw_nid"]').files[0];
       if(!name || !phone || !guests){
         showAlert('err','Please fill in all required fields.');
+        return;
+      }
+      if(!nidFile){
+        showAlert('err','Please upload NID, Driving License, or Card.');
         return;
       }
 
@@ -568,7 +726,8 @@
         <div class="rbw-room ${idx === 0 ? 'active' : ''} ${r.units_left <= 0 ? 'rbw-room-disabled' : ''}" data-room="${r.room_id}">
           <div class="rbw-room-top">
             <h4>${r.room_name}</h4>
-            ${r.units_left > 0 ? `<span class="rbw-badge">Available: ${r.units_left}</span>` : `<span class="rbw-badge rbw-badge-full">Fully Booked</span>`}
+            ${r.units_left > 0 ? `<span class="rbw-badge rbw-badge-available">Available: ${r.units_left}</span>` : `<span class="rbw-badge rbw-badge-full">Fully Booked</span>`}
+            <span class="rbw-selected-badge">Selected</span>
           </div>
           <div class="rbw-meta">
             <div>Per night: <b>${Number(r.price_per_night).toLocaleString()}</b></div>
@@ -576,10 +735,10 @@
             <div>Capacity: <b>${Number(r.capacity || 1).toLocaleString()}</b></div>
             <div>Booking Type: <b>${r.booking_type === 'entire_room' ? 'Entire Room' : 'Per Person'}</b></div>
             <div data-rooms-status>Need 1 room(s)</div>
-            <div>Total: <b data-total>${Number(r.total).toLocaleString()}</b></div>
-            <div data-discount-row hidden>Discount: <b data-discount>0</b></div>
-            <div>Pay Now: <b data-pay-now>${Number(r.deposit).toLocaleString()}</b></div>
-            <div>Balance: <b data-balance>${Number(r.balance).toLocaleString()}</b></div>
+            <div>Total: <b class="rbw-amt rbw-amt-total" data-total>${Number(r.total).toLocaleString()}</b></div>
+            <div data-discount-row hidden>Discount: <b class="rbw-amt rbw-amt-discount" data-discount>0</b></div>
+            <div>Pay Now: <b class="rbw-amt rbw-amt-pay" data-pay-now>${Number(r.deposit).toLocaleString()}</b></div>
+            <div>Balance: <b class="rbw-amt rbw-amt-balance" data-balance>${Number(r.balance).toLocaleString()}</b></div>
             <div>Rooms Needed: <b data-rooms-needed>1</b></div>
             <div>Dates: <b>${displayIn} -> ${displayOut}</b></div>
           </div>
@@ -594,15 +753,8 @@
       }
 
       updateVisibleCards = () => {
-        const noneSelected = selectedRoomIds.size === 0;
         listEl.querySelectorAll('.rbw-room[data-room]').forEach(card => {
-          const id = card.getAttribute('data-room');
-          if (noneSelected) {
-            card.classList.remove('rbw-room-hidden');
-            return;
-          }
-          const shouldHide = !showAllRooms && !selectedRoomIds.has(String(id));
-          card.classList.toggle('rbw-room-hidden', shouldHide);
+          card.classList.remove('rbw-room-hidden');
         });
       };
 
@@ -615,11 +767,17 @@
             }
             const roomId = chip.getAttribute('data-chip');
             if (!roomId) return;
+            const guests = getGuests();
+            const selectedRooms = currentRooms.filter(r => selectedRoomIds.has(String(r.room_id)));
             if (isMultiSelectMode()) {
               if (selectedRoomIds.has(String(roomId))) {
                 selectedRoomIds.delete(String(roomId));
                 chip.classList.remove('active');
               } else {
+                if (selectedRooms.length >= guests) {
+                  showAlert('err', 'You cannot select more rooms than guests.');
+                  return;
+                }
                 selectedRoomIds.add(String(roomId));
                 chip.classList.add('active');
               }
@@ -647,11 +805,17 @@
             showAlert('err','Room not found.');
             return;
           }
+          const guests = getGuests();
+          const selectedRooms = currentRooms.filter(r => selectedRoomIds.has(String(r.room_id)));
           if (isMultiSelectMode()) {
             if (selectedRoomIds.has(String(roomId))) {
               selectedRoomIds.delete(String(roomId));
               card.classList.remove('active');
             } else {
+              if (selectedRooms.length >= guests) {
+                showAlert('err', 'You cannot select more rooms than guests.');
+                return;
+              }
               selectedRoomIds.add(String(roomId));
               card.classList.add('active');
             }

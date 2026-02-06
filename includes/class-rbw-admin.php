@@ -11,6 +11,7 @@ class RBW_Admin {
     add_action('admin_init', [__CLASS__, 'register_settings']);
     add_action('init', [__CLASS__, 'register_booking_cpt']);
     add_action('admin_post_rbw_cancel_booking', [__CLASS__, 'cancel_booking']);
+    add_action('admin_post_rbw_export_bookings', [__CLASS__, 'export_bookings']);
   }
 
   public static function register_booking_cpt(){
@@ -157,6 +158,17 @@ class RBW_Admin {
     ?>
     <div class="wrap">
       <h1><?php esc_html_e('Bookings', 'rbw'); ?> <span class="subtitle">(<?php echo intval($total); ?>)</span></h1>
+      <div style="margin: 10px 0 14px;">
+        <?php
+          $export_url = wp_nonce_url(
+            add_query_arg(['action' => 'rbw_export_bookings'], admin_url('admin-post.php')),
+            'rbw_export_bookings'
+          );
+        ?>
+        <a class="button button-primary" href="<?php echo esc_url($export_url); ?>">
+          <?php esc_html_e('Download Bookings CSV', 'rbw'); ?>
+        </a>
+      </div>
       <?php if (empty($bookings)): ?>
         <p><?php esc_html_e('No bookings found.', 'rbw'); ?></p>
       <?php else: ?>
@@ -846,6 +858,87 @@ class RBW_Admin {
 
     $redirect = !empty($_GET['redirect_to']) ? esc_url_raw($_GET['redirect_to']) : admin_url('admin.php?page=rbw-bookings');
     wp_safe_redirect($redirect);
+    exit;
+  }
+
+  public static function export_bookings(){
+    if (!current_user_can('manage_options')) wp_die(__('Insufficient permissions', 'rbw'));
+    check_admin_referer('rbw_export_bookings');
+
+    $query = new WP_Query([
+      'post_type' => 'rbw_booking',
+      'post_status' => 'publish',
+      'posts_per_page' => -1,
+      'orderby' => 'date',
+      'order' => 'DESC',
+    ]);
+
+    $filename = 'rbw-bookings-' . date('Y-m-d') . '.csv';
+    header('Content-Type: text/csv; charset=utf-8');
+    header('Content-Disposition: attachment; filename=' . $filename);
+    header('Pragma: no-cache');
+    header('Expires: 0');
+
+    $out = fopen('php://output', 'w');
+    fputcsv($out, [
+      'Booking ID',
+      'Created',
+      'Room',
+      'Guest Name',
+      'Phone',
+      'Guests',
+      'Check In',
+      'Check Out',
+      'Total',
+      'Deposit',
+      'Balance',
+      'Payment Mode',
+      'Discount',
+      'Rooms Needed',
+      'Rooms JSON',
+      'NID URL',
+      'Order ID',
+    ]);
+
+    foreach ($query->posts as $post){
+      $room = get_post_meta($post->ID, '_rbw_room_name', true);
+      $check_in = get_post_meta($post->ID, '_rbw_check_in', true);
+      $check_out = get_post_meta($post->ID, '_rbw_check_out', true);
+      $total = get_post_meta($post->ID, '_rbw_total', true);
+      $deposit = get_post_meta($post->ID, '_rbw_deposit', true);
+      $balance = get_post_meta($post->ID, '_rbw_balance', true);
+      $guest = get_post_meta($post->ID, '_rbw_customer_name', true);
+      $phone = get_post_meta($post->ID, '_rbw_customer_phone', true);
+      $guests = get_post_meta($post->ID, '_rbw_guests', true);
+      $pay_mode = get_post_meta($post->ID, '_rbw_pay_mode', true);
+      $discount = get_post_meta($post->ID, '_rbw_discount', true);
+      $rooms_needed = get_post_meta($post->ID, '_rbw_rooms_needed', true);
+      $rooms_json = get_post_meta($post->ID, '_rbw_rooms_json', true);
+      $nid = get_post_meta($post->ID, '_rbw_nid_url', true);
+      $order_id = get_post_meta($post->ID, '_rbw_order_id', true);
+
+      fputcsv($out, [
+        $post->ID,
+        get_the_time(get_option('date_format') . ' ' . get_option('time_format'), $post),
+        $room ?: $post->post_title,
+        $guest,
+        $phone,
+        $guests,
+        $check_in,
+        $check_out,
+        $total,
+        $deposit,
+        $balance,
+        $pay_mode,
+        $discount,
+        $rooms_needed,
+        $rooms_json,
+        $nid,
+        $order_id,
+      ]);
+    }
+
+    fclose($out);
     exit;
   }
 }
