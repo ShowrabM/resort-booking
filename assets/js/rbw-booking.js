@@ -1167,10 +1167,17 @@
       const guestSetupHtml = `
         <div class="rbw-guest-type rbw-guest-type-inline" data-rbw-guest-type>
           <div class="rbw-guest-setup-top">
-            <div class="rbw-guest-type-title">Step 1: Enter Guest Number</div>
+            <div class="rbw-guest-step-copy">
+              <div class="rbw-guest-type-title">Step 1: Enter Guest Number</div>
+              <div class="rbw-guest-step-sub">Tell us total guests first. System will suggest room count.</div>
+            </div>
             <label class="rbw-guest-count">
               <span>Total Guests</span>
-              <input type="number" min="0" step="1" value="${Number(getGuests() || 0)}" data-rbw-guests required>
+              <div class="rbw-guest-input-wrap">
+                <button type="button" class="rbw-guest-adjust" data-rbw-guest-adjust="-1" aria-label="Decrease guest count">-</button>
+                <input type="number" min="0" step="1" value="${Number(getGuests() || 0)}" data-rbw-guests required>
+                <button type="button" class="rbw-guest-adjust" data-rbw-guest-adjust="1" aria-label="Increase guest count">+</button>
+              </div>
             </label>
           </div>
           <div class="rbw-guest-type-title">Step 2: Select Guest Type</div>
@@ -1243,6 +1250,21 @@
           applyGuestTypeToGuests(getGuestType(), false);
           syncGuestTypeOptions(true);
           updatePricingForGuests();
+        });
+      }
+      const guestAdjustButtons = listEl.querySelectorAll('[data-rbw-guest-adjust]');
+      if (guestAdjustButtons.length && listGuestsInput) {
+        guestAdjustButtons.forEach((btn) => {
+          btn.addEventListener('click', () => {
+            const delta = parseInt(btn.getAttribute('data-rbw-guest-adjust') || '0', 10);
+            if (!Number.isFinite(delta) || delta === 0) return;
+            const current = parseInt(listGuestsInput.value || '0', 10);
+            const min = parseInt(listGuestsInput.min || '0', 10);
+            const step = Math.max(1, parseInt(listGuestsInput.step || '1', 10));
+            const next = Math.max(min, (Number.isFinite(current) ? current : 0) + (delta * step));
+            listGuestsInput.value = String(next);
+            listGuestsInput.dispatchEvent(new Event('input', { bubbles: true }));
+          });
         });
       }
       const guestTypeWrap = listEl.querySelector('[data-rbw-guest-type]');
