@@ -26,7 +26,11 @@ class RBW_Ajax {
     }
 
     $group_filter = sanitize_text_field($_POST['group'] ?? '');
-    $rooms = RBW_Availability::get_available($check_in, $check_out, $group_filter);
+    $room_filter = sanitize_text_field($_POST['room'] ?? '');
+    if ($room_filter !== '') {
+      $group_filter = '';
+    }
+    $rooms = RBW_Availability::get_available($check_in, $check_out, $group_filter, $room_filter);
     error_log('[RBW] availability ok rooms='.count($rooms));
     wp_send_json_success(['rooms' => $rooms]);
   }
@@ -51,6 +55,22 @@ class RBW_Ajax {
     $guests = (int)($_POST['guests'] ?? 0);
     $pay_mode = sanitize_text_field($_POST['pay_mode'] ?? 'deposit');
     if ($pay_mode !== 'full') $pay_mode = 'deposit';
+    $guest_type = sanitize_text_field($_POST['guest_type'] ?? '');
+    if (!in_array($guest_type, ['single','couple','group'], true)) {
+      if ($guests <= 1) $guest_type = 'single';
+      elseif ($guests === 2) $guest_type = 'couple';
+      else $guest_type = 'group';
+    }
+    if ($guest_type === 'single') {
+      $guests = max(1, (int)$guests);
+    } elseif ($guest_type === 'couple') {
+      $guests = max(2, (int)$guests);
+      if ($guests % 2 !== 0) {
+        $guests += 1;
+      }
+    } else {
+      $guests = max(3, (int)$guests);
+    }
 
     if (!$check_in || !$check_out || !$customer_name || !$customer_phone || $guests <= 0) {
       wp_send_json_error(['message'=>'Missing required data']);
@@ -76,17 +96,35 @@ class RBW_Ajax {
       $rid = sanitize_text_field($rsel['room_id'] ?? '');
       if (!$rid || empty($by_id[$rid])) continue;
       $r = $by_id[$rid];
-      $capacity = (int)($r['capacity'] ?? 1);
-      if ($capacity <= 0) $capacity = 1;
+      if ($guest_type === 'single') {
+        $capacity = 1;
+      } elseif ($guest_type === 'couple') {
+        $capacity = 2;
+      } else {
+        $capacity = 4;
+      }
       $assign = min($capacity, $remaining);
       if ($assign <= 0) continue;
       $remaining -= $assign;
 
-      $ppn = (float)($r['price_per_night'] ?? 0);
+      $ppn_single = (float)($r['price_single'] ?? 0);
+      $ppn_couple = (float)($r['price_couple'] ?? 0);
+      $ppn_group = (float)($r['price_group'] ?? 0);
+      if ($guest_type === 'single') {
+        $ppn = $ppn_single;
+      } elseif ($guest_type === 'couple') {
+        $ppn = $ppn_couple > 0 ? $ppn_couple : $ppn_single;
+      } else {
+        $ppn = $ppn_group > 0 ? $ppn_group : $ppn_single;
+      }
       $deposit_setting = (float)($r['deposit'] ?? 0);
-      $booking_type = (($r['booking_type'] ?? 'per_person') === 'entire_room') ? 'entire_room' : 'per_person';
+      $booking_type = 'package';
 
-      $line_total = ($booking_type === 'entire_room') ? ($ppn * $nights) : ($ppn * $nights * $assign);
+      if ($guest_type === 'group') {
+        $line_total = $ppn * $nights * $assign;
+      } else {
+        $line_total = $ppn * $nights;
+      }
       $line_discount = ($pay_mode === 'full') ? ($line_total * 0.05) : 0;
       $line_pay_now = ($pay_mode === 'full') ? max(0, $line_total - $line_discount) : $deposit_setting;
       $line_balance = ($pay_mode === 'full') ? 0 : max(0, $line_total - $line_pay_now);
@@ -96,13 +134,21 @@ class RBW_Ajax {
       $pay_now += $line_pay_now;
       $balance += $line_balance;
 
+      $room_image = esc_url_raw($r['image'] ?? '');
+      if ($room_image === '' && !empty($r['images']) && is_array($r['images'])) {
+        $first_image = reset($r['images']);
+        $room_image = esc_url_raw($first_image ?: '');
+      }
+
       $rooms_payload[] = [
         'room_id' => $rid,
         'room_name' => sanitize_text_field($r['room_name'] ?? ''),
+        'image' => $room_image,
         'guests' => $assign,
         'capacity' => $capacity,
         'booking_type' => $booking_type,
         'price_per_night' => $ppn,
+        'guest_type' => $guest_type,
       ];
     }
 
@@ -150,6 +196,7 @@ class RBW_Ajax {
       'meta_input' => [
         '_rbw_room_id' => $rooms_payload[0]['room_id'] ?? '',
         '_rbw_room_name' => $room_name,
+        '_rbw_room_image' => $rooms_payload[0]['image'] ?? '',
         '_rbw_check_in' => $check_in,
         '_rbw_check_out'=> $check_out,
         '_rbw_nights' => $nights,
@@ -164,6 +211,8 @@ class RBW_Ajax {
         '_rbw_customer_name' => $customer_name,
         '_rbw_customer_phone' => $customer_phone,
         '_rbw_guests' => $guests,
+        '_rbw_guest_type' => $guest_type,
+        '_rbw_invoice_token' => wp_generate_password(32, false, false),
         '_rbw_nid_url' => $nid_url,
         '_rbw_pay_mode' => $pay_mode,
         '_rbw_discount' => $discount,
@@ -205,6 +254,7 @@ class RBW_Ajax {
         'booking_id' => $booking_id,
         'room_id' => $rooms_payload[0]['room_id'] ?? '',
         'room_name' => $room_name,
+        'room_image' => $rooms_payload[0]['image'] ?? '',
         'check_in' => $check_in,
         'check_out'=> $check_out,
         'nights' => $nights,
@@ -218,6 +268,7 @@ class RBW_Ajax {
         'customer_name' => $customer_name,
         'customer_phone' => $customer_phone,
         'guests' => $guests,
+        'guest_type' => $guest_type,
         'nid_url' => $nid_url,
         'pay_mode' => $pay_mode,
         'discount' => $discount,

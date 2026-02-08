@@ -4,6 +4,12 @@ This plugin provides a simple room booking flow with WooCommerce payment.
 
 ## Changelog
 
+### 1.0.4
+- Fixed settings data safety: room/group options are no longer cleared by unrelated saves.
+- Added recovery tools for empty data states: recover from existing bookings and restore last backup.
+- Improved multi-room data handling for admin/bookings and invoice sharing flows.
+- Polished admin Rooms table layout/CSS to prevent collapsed columns and broken row alignment.
+
 ### 1.0.3
 - Booking summary UI redesigned with sectioned cards and icons.
 - Currency formatting added using WooCommerce settings.
@@ -22,7 +28,7 @@ This plugin provides a simple room booking flow with WooCommerce payment.
 - Admin: added CSV export for booking details.
 - Order meta display cleaned and more user-friendly.
 
-Version: 1.0.3
+Version: 1.0.4
 
 ## Structure
 

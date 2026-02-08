@@ -3,7 +3,7 @@
  * Plugin Name: Resort Booking
  * Plugin URI: https://onvirtualworld.com
  * Description: A plugin to manage resort bookings.
- * Version: 1.0.3
+ * Version: 1.0.4
  * Author: Showrab Mojumdar
  * Author URI: https://github.com/ShowrabM/resort-booking
  * License: GPL2
@@ -12,7 +12,7 @@
 
 if (!defined('ABSPATH')) exit;
 
-define('RBW_VERSION', '1.0.3');
+define('RBW_VERSION', '1.0.4');
 define('RBW_PLUGIN_DIR', plugin_dir_path(__FILE__));
 define('RBW_PLUGIN_URL', plugin_dir_url(__FILE__));
 
@@ -89,17 +89,15 @@ add_action('rbw_maybe_cancel_booking', function($booking_id){
 
 // Primary shortcode: [resort_booking group="vip"]
 add_shortcode('resort_booking', function($atts = []){
-  $raw_room = '';
-  if (is_array($atts) && isset($atts['room'])) {
-    $raw_room = trim((string)$atts['room']);
-  }
-  if ($raw_room !== '') {
-    return '<div class="rbw-error">The room parameter is no longer supported. Use group="..." or [resort_booking].</div>';
-  }
   $atts = shortcode_atts([
     'group' => '',
+    'room' => '',
   ], $atts, 'resort_booking');
   $group = trim($atts['group']);
+  $room = trim($atts['room']);
+  if ($room !== '') {
+    $group = '';
+  }
 
   wp_enqueue_style('rbw-booking');
   wp_enqueue_script('rbw-booking');
@@ -108,17 +106,34 @@ $id = uniqid('rbw_', true);
 
 ob_start(); ?>
   <div class="rbw-wrap" data-rbw-widget="<?php echo esc_attr($id); ?>"
-    <?php if($group!=='') echo 'data-rbw-group="'.esc_attr($group).'"'; ?>>
+    <?php if($group!=='') echo 'data-rbw-group="'.esc_attr($group).'"'; ?>
+    <?php if($room!=='') echo 'data-rbw-room="'.esc_attr($room).'"'; ?>>
     <button type="button" class="rbw-btn" data-rbw-open>Book Now</button>
 
     <div class="rbw-backdrop" data-rbw-backdrop aria-hidden="true">
       <div class="rbw-modal" role="dialog" aria-modal="true">
         <div class="rbw-head">
-          <div class="rbw-title">
-            <h3>Select Dates</h3>
-            <p>View available rooms by date.</p>
+          <div class="rbw-head-top">
+            <div class="rbw-title">
+              <h3>Plan Your Stay</h3>
+              <p>Pick dates, select rooms, and confirm details.</p>
+            </div>
+            <button type="button" class="rbw-close" data-rbw-close>Close</button>
           </div>
-          <button type="button" class="rbw-close" data-rbw-close>Close</button>
+          <div class="rbw-steps" data-rbw-steps data-step="1">
+            <div class="rbw-step" data-step-item="1">
+              <span class="rbw-step-dot">1</span>
+              <span class="rbw-step-label">Dates</span>
+            </div>
+            <div class="rbw-step" data-step-item="2">
+              <span class="rbw-step-dot">2</span>
+              <span class="rbw-step-label">Rooms</span>
+            </div>
+            <div class="rbw-step" data-step-item="3">
+              <span class="rbw-step-dot">3</span>
+              <span class="rbw-step-label">Details</span>
+            </div>
+          </div>
         </div>
 
         <div class="rbw-body">
@@ -135,7 +150,7 @@ ob_start(); ?>
           <div class="rbw-calendar" data-rbw-calendar></div>
 
           <div class="rbw-actions">
-            <button type="button" class="rbw-search" data-rbw-search>View Available Rooms</button>
+            <button type="button" class="rbw-search" data-rbw-search>Find Rooms</button>
           </div>
 
 
