@@ -4,6 +4,13 @@ This plugin provides a simple room booking flow with WooCommerce payment.
 
 ## Changelog
 
+### 1.0.5
+- Added guest type controls (single/couple/group) and per-room stock + advance settings in admin.
+- Group advance payments now apply when booking multiple rooms; removed 50% minimum advance rule.
+- Improved availability handling (pending bookings counted) and group full-day calendar marking.
+- Invoice PDF now supports Bangla using mPDF + SolaimanLipi; fixed Unicode booking data storage.
+- UX refinements for room selection, multi-room flow, and clearer empty/full availability messages.
+
 ### 1.0.4
 - Fixed settings data safety: room/group options are no longer cleared by unrelated saves.
 - Added recovery tools for empty data states: recover from existing bookings and restore last backup.
@@ -28,7 +35,7 @@ This plugin provides a simple room booking flow with WooCommerce payment.
 - Admin: added CSV export for booking details.
 - Order meta display cleaned and more user-friendly.
 
-Version: 1.0.4
+Version: 1.0.5
 
 ## Structure
 

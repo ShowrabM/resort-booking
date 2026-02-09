@@ -329,6 +329,7 @@ class RBW_Admin {
         'stock' => max(1, (int)($room['stock'] ?? 1)),
         'capacity' => 4,
         'deposit' => 0,
+        'guest_types' => ['single','couple','group'],
         'booking_type' => 'entire_room',
       ];
       $idx++;
@@ -498,6 +499,21 @@ class RBW_Admin {
       $stock = isset($item['stock']) ? intval($item['stock']) : 1;
       $capacity = isset($item['capacity']) ? intval($item['capacity']) : 0;
       $deposit = isset($item['deposit']) ? floatval($item['deposit']) : 0;
+      $guest_types = [];
+      if (isset($item['guest_types'])) {
+        $raw_types = $item['guest_types'];
+        if (!is_array($raw_types)) {
+          $raw_types = array_map('trim', explode(',', (string)$raw_types));
+        }
+        foreach ($raw_types as $t) {
+          $t = sanitize_text_field((string)$t);
+          if (in_array($t, ['single','couple','group'], true)) $guest_types[] = $t;
+        }
+      }
+      $guest_types = array_values(array_unique($guest_types));
+      if (empty($guest_types)) {
+        $guest_types = ['single','couple','group'];
+      }
       $code_raw = isset($item['code']) ? $item['code'] : '';
       $booking_type = isset($item['booking_type']) ? sanitize_text_field($item['booking_type']) : 'per_person';
       $group_owner = sanitize_title((string)($item['group_owner'] ?? ''));
@@ -532,6 +548,7 @@ class RBW_Admin {
         'stock' => max(0, $stock),
         'capacity' => 4,
         'deposit' => max(0, $deposit),
+        'guest_types' => $guest_types,
         'booking_type' => 'entire_room',
         'group_owner' => $group_owner,
       ];
@@ -587,11 +604,13 @@ class RBW_Admin {
           $rooms[] = $rid;
         }
       }
+      $advance_extra = isset($item['advance_extra']) ? floatval($item['advance_extra']) : 0;
 
       $clean[] = [
         'name' => $name,
         'code' => $code,
         'rooms' => array_values(array_unique($rooms)),
+        'advance_extra' => max(0, $advance_extra),
       ];
     }
     return $clean;
@@ -916,6 +935,7 @@ class RBW_Admin {
                 $gcode_raw = sanitize_title((string)($group['code'] ?? ($group['name'] ?? '')));
                 $gcode = esc_attr($gcode_raw);
                 $grooms = is_array($group['rooms'] ?? null) ? $group['rooms'] : [];
+                $gadvance = esc_attr($group['advance_extra'] ?? 0);
                 ?>
                 <div class="rbw-group-card" data-group-index="<?php echo (int)$gi; ?>" data-group-code="<?php echo esc_attr($gcode_raw); ?>">
                   <div class="rbw-group-head">
@@ -923,6 +943,10 @@ class RBW_Admin {
                     <input type="number" min="1" step="1" class="rbw-group-qty" placeholder="<?php esc_attr_e('Qty', 'rbw'); ?>" title="<?php esc_attr_e('Room Quantity', 'rbw'); ?>">
                     <span class="rbw-group-count" data-group-count>0 rooms</span>
                     <button type="button" class="button-link-delete rbw-group-remove"><?php esc_html_e('Remove', 'rbw'); ?></button>
+                  </div>
+                  <div class="rbw-group-advance">
+                    <label><?php esc_html_e('Extra Advance / Additional Room', 'rbw'); ?></label>
+                    <input type="number" step="0.01" min="0" name="<?php echo esc_attr(self::OPT_GROUPS); ?>[<?php echo $gi; ?>][advance_extra]" value="<?php echo $gadvance; ?>" class="rbw-group-advance-input">
                   </div>
                   <div class="rbw-group-shortcode">
                     <label><?php esc_html_e('Shortcode', 'rbw'); ?></label>
@@ -977,6 +1001,9 @@ class RBW_Admin {
                     <th><?php esc_html_e('Single Price / night (1 guest)', 'rbw'); ?></th>
                     <th><?php esc_html_e('Couple Price / night (2 guests)', 'rbw'); ?></th>
                     <th><?php esc_html_e('Group Price / night (3-4 guests)', 'rbw'); ?></th>
+                    <th><?php esc_html_e('Guest Types', 'rbw'); ?></th>
+                    <th><?php esc_html_e('Advance', 'rbw'); ?></th>
+                    <th><?php esc_html_e('Room Qty', 'rbw'); ?></th>
                     <th><?php esc_html_e('Image', 'rbw'); ?></th>
                     <th><?php esc_html_e('Actions', 'rbw'); ?></th>
                   </tr>
@@ -1182,6 +1209,9 @@ class RBW_Admin {
         const priceSingleInput = row.querySelector(`input[name="${opt}[${i}][price_single]"]`);
         const priceCoupleInput = row.querySelector(`input[name="${opt}[${i}][price_couple]"]`);
         const priceGroupInput = row.querySelector(`input[name="${opt}[${i}][price_group]"]`);
+        const depositInput = row.querySelector(`input[name="${opt}[${i}][deposit]"]`);
+        const stockInput = row.querySelector(`input[name="${opt}[${i}][stock]"]`);
+        const guestTypeInputs = row.querySelectorAll(`input[name="${opt}[${i}][guest_types][]"]`);
         const capInput = row.querySelector(`input[name="${opt}[${i}][capacity]"]`);
         const rid = opts.id || createTempRoomId(i);
         const rowOwner = normalizeCode(opts.group_owner || '');
@@ -1192,6 +1222,12 @@ class RBW_Admin {
         if (priceSingleInput && opts.price_single !== undefined) priceSingleInput.value = opts.price_single;
         if (priceCoupleInput && opts.price_couple !== undefined) priceCoupleInput.value = opts.price_couple;
         if (priceGroupInput && opts.price_group !== undefined) priceGroupInput.value = opts.price_group;
+        if (depositInput && opts.deposit !== undefined) depositInput.value = opts.deposit;
+        if (stockInput && opts.stock !== undefined) stockInput.value = opts.stock;
+        if (guestTypeInputs.length && Array.isArray(opts.guest_types)) {
+          const allow = new Set(opts.guest_types.map(v => String(v)));
+          guestTypeInputs.forEach(inp => { inp.checked = allow.has(inp.value); });
+        }
         const initialImages = Array.isArray(opts.images)
           ? opts.images
           : (opts.image ? [opts.image] : []);
@@ -1221,6 +1257,13 @@ class RBW_Admin {
             <td><input type="number" step="0.01" min="0" name="${opt}[${i}][price_single]" value="5000"></td>
             <td><input type="number" step="0.01" min="0" name="${opt}[${i}][price_couple]" value="0"></td>
             <td><input type="number" step="0.01" min="0" name="${opt}[${i}][price_group]" value="0"></td>
+            <td class="rbw-guest-types">
+              <label><input type="checkbox" name="${opt}[${i}][guest_types][]" value="single" checked> <?php echo esc_html__('Single', 'rbw'); ?></label>
+              <label><input type="checkbox" name="${opt}[${i}][guest_types][]" value="couple" checked> <?php echo esc_html__('Couple', 'rbw'); ?></label>
+              <label><input type="checkbox" name="${opt}[${i}][guest_types][]" value="group" checked> <?php echo esc_html__('Group', 'rbw'); ?></label>
+            </td>
+            <td><input type="number" step="0.01" min="0" name="${opt}[${i}][deposit]" value="0"></td>
+            <td><input type="number" step="1" min="0" name="${opt}[${i}][stock]" value="1"></td>
             <td class="rbw-img-cell">
               <div class="rbw-img-preview-list" data-rbw-image-preview-list>
                 <div class="rbw-img-empty"><?php esc_html_e('No image selected', 'rbw'); ?></div>
@@ -1298,6 +1341,13 @@ class RBW_Admin {
       table.addEventListener('input', (e) => {
         const row = e.target.closest('tr');
         if (!row) return;
+        if (e.target.matches('input[type="checkbox"][name$="[guest_types][]"]')) {
+          const checks = row.querySelectorAll('input[name$="[guest_types][]"]');
+          const anyChecked = Array.from(checks).some(c => c.checked);
+          if (!anyChecked) {
+            e.target.checked = true;
+          }
+        }
         const idInput = row.querySelector(`input[name$="[id]"]`);
         const nameInput = row.querySelector(`input[name$="[name]"]`);
         const capInput = row.querySelector(`input[name$="[capacity]"]`);
@@ -1358,6 +1408,10 @@ class RBW_Admin {
               <input type="number" min="1" step="1" class="rbw-group-qty" placeholder="<?php echo esc_attr__('Qty', 'rbw'); ?>" title="<?php echo esc_attr__('Room Quantity', 'rbw'); ?>">
               <span class="rbw-group-count" data-group-count>0 rooms</span>
               <button type="button" class="button-link-delete rbw-group-remove"><?php esc_html_e('Remove', 'rbw'); ?></button>
+            </div>
+            <div class="rbw-group-advance">
+              <label><?php esc_html_e('Extra Advance / Additional Room', 'rbw'); ?></label>
+              <input type="number" step="0.01" min="0" name="${gOpt}[${i}][advance_extra]" value="0" class="rbw-group-advance-input">
             </div>
             <div class="rbw-group-shortcode">
               <label><?php esc_html_e('Shortcode', 'rbw'); ?></label>
@@ -1585,6 +1639,14 @@ class RBW_Admin {
         display:grid;
         gap:4px;
       }
+      .rbw-group-advance{
+        margin-top: 8px;
+        display:grid;
+        gap:4px;
+      }
+      .rbw-group-advance input{
+        max-width: 220px;
+      }
       .rbw-group-shortcode input{
         width: 100%;
       }
@@ -1592,6 +1654,19 @@ class RBW_Admin {
       .rbw-group-rooms summary{
         color:#1e3a8a;
         font-weight:600;
+      }
+      #rbw-rooms-table .rbw-guest-types{
+        display:flex;
+        flex-direction:column;
+        gap:4px;
+        min-width: 140px;
+      }
+      #rbw-rooms-table .rbw-guest-types label{
+        display:flex;
+        align-items:center;
+        gap:6px;
+        font-size:12px;
+        line-height:1.2;
       }
       .rbw-room-badges{
         display:flex;
@@ -1917,6 +1992,14 @@ class RBW_Admin {
     $price_single = esc_attr($room['price_single'] ?? 0);
     $price_couple = esc_attr($room['price_couple'] ?? 0);
     $price_group = esc_attr($room['price_group'] ?? 0);
+    $stock = esc_attr($room['stock'] ?? 1);
+    $deposit = esc_attr($room['deposit'] ?? 0);
+    $guest_types = $room['guest_types'] ?? ['single','couple','group'];
+    if (!is_array($guest_types)) {
+      $guest_types = array_map('trim', explode(',', (string)$guest_types));
+    }
+    $guest_types = array_values(array_intersect(['single','couple','group'], array_map('strval', $guest_types)));
+    if (empty($guest_types)) $guest_types = ['single','couple','group'];
     $image = esc_url($room['image'] ?? '');
     $images = [];
     if (!empty($room['images']) && is_array($room['images'])) {
@@ -1944,6 +2027,13 @@ class RBW_Admin {
       <td><input type="number" step="0.01" min="0" name="<?php echo esc_attr(self::OPT_ROOMS); ?>[<?php echo $i; ?>][price_single]" value="<?php echo $price_single ?: $price; ?>"></td>
       <td><input type="number" step="0.01" min="0" name="<?php echo esc_attr(self::OPT_ROOMS); ?>[<?php echo $i; ?>][price_couple]" value="<?php echo $price_couple; ?>"></td>
       <td><input type="number" step="0.01" min="0" name="<?php echo esc_attr(self::OPT_ROOMS); ?>[<?php echo $i; ?>][price_group]" value="<?php echo $price_group; ?>"></td>
+      <td class="rbw-guest-types">
+        <label><input type="checkbox" name="<?php echo esc_attr(self::OPT_ROOMS); ?>[<?php echo $i; ?>][guest_types][]" value="single" <?php checked(in_array('single', $guest_types, true)); ?>> <?php esc_html_e('Single', 'rbw'); ?></label>
+        <label><input type="checkbox" name="<?php echo esc_attr(self::OPT_ROOMS); ?>[<?php echo $i; ?>][guest_types][]" value="couple" <?php checked(in_array('couple', $guest_types, true)); ?>> <?php esc_html_e('Couple', 'rbw'); ?></label>
+        <label><input type="checkbox" name="<?php echo esc_attr(self::OPT_ROOMS); ?>[<?php echo $i; ?>][guest_types][]" value="group" <?php checked(in_array('group', $guest_types, true)); ?>> <?php esc_html_e('Group', 'rbw'); ?></label>
+      </td>
+      <td><input type="number" step="0.01" min="0" name="<?php echo esc_attr(self::OPT_ROOMS); ?>[<?php echo $i; ?>][deposit]" value="<?php echo $deposit; ?>"></td>
+      <td><input type="number" step="1" min="0" name="<?php echo esc_attr(self::OPT_ROOMS); ?>[<?php echo $i; ?>][stock]" value="<?php echo $stock; ?>"></td>
       <td class="rbw-img-cell">
         <div class="rbw-img-preview-list" data-rbw-image-preview-list>
           <?php if (!empty($images)): ?>
@@ -1980,7 +2070,8 @@ class RBW_Admin {
     if (!current_user_can('manage_options')) wp_die(__('Insufficient permissions', 'rbw'));
     check_admin_referer('rbw_invoice_booking_'.$booking_id);
 
-    self::output_invoice($booking_id, false, !empty($_GET['download']));
+    $download_pdf = !empty($_GET['download']);
+    self::output_invoice($booking_id, false, $download_pdf, $download_pdf);
   }
 
   public static function render_customer_booking_invoice(){
@@ -2011,10 +2102,11 @@ class RBW_Admin {
       wp_die(__('Invoice is not available until payment is completed.', 'rbw'));
     }
 
-    self::output_invoice($booking_id, true, !empty($_GET['download']));
+    $download_pdf = !empty($_GET['download']);
+    self::output_invoice($booking_id, true, $download_pdf, $download_pdf);
   }
 
-  private static function output_invoice($booking_id, $is_public = false, $auto_print = false){
+  private static function output_invoice($booking_id, $is_public = false, $auto_print = false, $download_pdf = false){
     $booking_id = absint($booking_id);
     if (!$booking_id) wp_die(__('Invalid booking.', 'rbw'));
 
@@ -2104,6 +2196,7 @@ class RBW_Admin {
       ];
     }
 
+    ob_start();
     ?>
     <!doctype html>
     <html lang="en">
@@ -2112,11 +2205,17 @@ class RBW_Admin {
       <meta name="viewport" content="width=device-width, initial-scale=1">
       <title><?php echo esc_html(sprintf(__('Invoice #%d', 'rbw'), $booking_id)); ?></title>
       <style>
+        @font-face{
+          font-family:'SolaimanLipi';
+          src:url('<?php echo esc_url(RBW_PLUGIN_URL . 'assets/fonts/SolaimanLipi.ttf'); ?>') format('truetype');
+          font-weight:400;
+          font-style:normal;
+        }
         :root{
           --rbw-invoice-accent: <?php echo esc_html($invoice_accent); ?>;
           --rbw-invoice-watermark-opacity: <?php echo esc_html(number_format((float)$invoice_watermark_opacity, 2, '.', '')); ?>;
         }
-        body{ margin:0; background:#f3f4f6; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif; color:#111827; }
+        body{ margin:0; background:#f3f4f6; font-family: 'SolaimanLipi', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif; color:#111827; }
         .wrap{ max-width: 900px; margin: 18px auto; padding: 0 14px; }
         .bar{ margin-bottom: 10px; display:flex; gap:10px; justify-content:flex-end; }
         .bar a, .bar button{
@@ -2172,7 +2271,7 @@ class RBW_Admin {
           .invoice{ border:0; border-radius:0; }
         }
       </style>
-      <?php if ($auto_print): ?>
+      <?php if ($auto_print && !$download_pdf): ?>
       <script>
         window.addEventListener('load', function(){ window.print(); });
       </script>
@@ -2302,7 +2401,65 @@ class RBW_Admin {
     </body>
     </html>
     <?php
+    $invoice_html = ob_get_clean();
+    if ($download_pdf) {
+      self::stream_invoice_pdf($booking_id, $invoice_html);
+      exit;
+    }
+    echo $invoice_html;
     exit;
+  }
+
+  private static function stream_invoice_pdf($booking_id, $html){
+    $mpdf = self::create_mpdf_instance();
+    if (!$mpdf) {
+      header('Content-Type: text/html; charset=utf-8');
+      echo $html;
+      return;
+    }
+    $title = sprintf(__('Invoice #%d', 'rbw'), $booking_id);
+    $filename = 'rbw-invoice-' . $booking_id . '.pdf';
+    try {
+      $mpdf->SetTitle($title);
+      $mpdf->WriteHTML($html);
+      $mpdf->Output($filename, 'D');
+    } catch (\Throwable $e) {
+      error_log('[RBW] mpdf output failed: ' . $e->getMessage());
+      header('Content-Type: text/html; charset=utf-8');
+      echo $html;
+    }
+  }
+
+  private static function create_mpdf_instance(){
+    static $cached;
+    if ($cached !== null) return $cached;
+    $autoload = RBW_PLUGIN_DIR . 'vendor/autoload.php';
+    if (!is_file($autoload)) {
+      $cached = false;
+      return $cached;
+    }
+    require_once $autoload;
+    try {
+      $configVars = new \Mpdf\Config\ConfigVariables();
+      $fontDirs = $configVars->getDefaults()['fontDir'];
+      $fontDirs[] = RBW_PLUGIN_DIR . 'assets/fonts';
+      $fontVars = new \Mpdf\Config\FontVariables();
+      $fontData = $fontVars->getDefaults()['fontdata'];
+      $fontData['solaimanlipi'] = [
+        'R' => 'SolaimanLipi.ttf',
+      ];
+      $cached = new \Mpdf\Mpdf([
+        'mode' => 'utf-8',
+        'format' => 'A4',
+        'default_font' => 'solaimanlipi',
+        'fontDir' => $fontDirs,
+        'fontdata' => $fontData,
+      ]);
+    } catch (\Throwable $e) {
+      error_log('[RBW] mpdf init failed: ' . $e->getMessage());
+      $cached = false;
+    }
+    return $cached;
   }
 
   public static function cancel_booking(){

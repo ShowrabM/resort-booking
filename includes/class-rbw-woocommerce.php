@@ -34,6 +34,7 @@ class RBW_WooCommerce {
     $pay_mode = $b['pay_mode'] ?? 'deposit';
     $discount = (float)($b['discount'] ?? 0);
     $pay_now = isset($b['pay_now']) ? (float)$b['pay_now'] : (float)($b['deposit'] ?? 0);
+    $group_extra = (float)($b['group_advance_extra'] ?? 0);
 
     $item_data[] = ['name'=>'Dates', 'value'=>esc_html($b['check_in'].' -> '.$b['check_out'])];
     $item_data[] = ['name'=>'Nights', 'value'=>esc_html($b['nights'])];
@@ -44,6 +45,9 @@ class RBW_WooCommerce {
     $item_data[] = ['name'=>'Pay Now', 'value'=>wc_price($pay_now)];
     $item_data[] = ['name'=>'Balance Due', 'value'=>wc_price((float)$b['balance'])];
     $item_data[] = ['name'=>'Payment Mode', 'value'=>esc_html($pay_mode === 'full' ? 'Full (5% off)' : 'Advance payment')];
+    if ($group_extra > 0) {
+      $item_data[] = ['name'=>'Group Extra Advance', 'value'=>wc_price($group_extra) . ' per additional room'];
+    }
     $item_data[] = ['name'=>'Advance Rule', 'value'=>esc_html('1 room = pay 1000 now. 2+ rooms = pay at least 50% now.')];
     $item_data[] = ['name'=>'Guest Name', 'value'=>esc_html($b['customer_name'])];
     $item_data[] = ['name'=>'Phone', 'value'=>esc_html($b['customer_phone'])];
@@ -208,6 +212,8 @@ class RBW_WooCommerce {
     if (isset($b['pay_now'])) $item->add_meta_data('_rbw_pay_now', (float)$b['pay_now'], true);
     if (isset($b['deposit_setting'])) $item->add_meta_data('_rbw_deposit_setting', (float)$b['deposit_setting'], true);
     if (isset($b['deposit_total'])) $item->add_meta_data('_rbw_deposit_total', (float)$b['deposit_total'], true);
+    if (isset($b['group_code'])) $item->add_meta_data('_rbw_group_code', (string)$b['group_code'], true);
+    if (isset($b['group_advance_extra'])) $item->add_meta_data('_rbw_group_advance_extra', (float)$b['group_advance_extra'], true);
     $item->add_meta_data('_rbw_customer_name', (string)$b['customer_name'], true);
     $item->add_meta_data('_rbw_customer_phone', (string)$b['customer_phone'], true);
     $item->add_meta_data('_rbw_guests', (int)$b['guests'], true);
@@ -250,6 +256,8 @@ class RBW_WooCommerce {
     $capacity = $item->get_meta('_rbw_capacity', true);
     $rooms_needed = $item->get_meta('_rbw_rooms_needed', true);
     $rooms_json = $item->get_meta('_rbw_rooms_json', true);
+    $group_code = (string)$item->get_meta('_rbw_group_code', true);
+    $group_extra = (float)$item->get_meta('_rbw_group_advance_extra', true);
 
     $add($rows, 'Room', esc_html($room_name));
     if ($check_in || $check_out) {
@@ -264,6 +272,8 @@ class RBW_WooCommerce {
     if (!empty($pay_mode)) {
       $add($rows, 'Payment Mode', esc_html($pay_mode === 'full' ? 'Full (5% off)' : 'Advance payment'));
     }
+    if (!empty($group_code)) $add($rows, 'Group', esc_html($group_code));
+    if ($group_extra > 0) $add($rows, 'Group Extra Advance', wc_price($group_extra) . ' per additional room');
     $add($rows, 'Advance Rule', esc_html('1 room = pay 1000 now. 2+ rooms = pay at least 50% now.'));
     if (!empty($customer_name)) $add($rows, 'Guest Name', esc_html($customer_name));
     if (!empty($customer_phone)) $add($rows, 'Phone', esc_html($customer_phone));

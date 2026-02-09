@@ -108,7 +108,7 @@ class RBW_Availability {
     // Check existing bookings to calculate real availability
     $args = [
       'post_type' => 'rbw_booking',
-      'post_status' => 'publish',
+      'post_status' => ['publish', 'pending'],
       'posts_per_page' => -1,
       'fields' => 'ids',
       'meta_query' => [
@@ -257,8 +257,12 @@ class RBW_Availability {
       }
 
       // Legacy DB compatibility: treat missing/invalid stock as 1 room unit.
-      $stock = isset($room['stock']) ? (int)$room['stock'] : 1;
-      if ($stock <= 0) $stock = 1;
+      if (!isset($room['stock']) || $room['stock'] === '' || !is_numeric($room['stock'])) {
+        $stock = 1;
+      } else {
+        $stock = (int)$room['stock'];
+      }
+      if ($stock < 0) $stock = 0;
       $capacity = (int)($room['capacity'] ?? 1);
       if ($capacity <= 0) $capacity = 1;
       $booked = $booked_counts[$effective_room_id] ?? $booked_counts[$r_code] ?? $booked_counts[$r_id] ?? 0;
@@ -272,6 +276,12 @@ class RBW_Availability {
       $ppn_couple = (float)($room['price_couple'] ?? 0);
       $ppn_group = (float)($room['price_group'] ?? 0);
       $deposit = (float)($room['deposit'] ?? 0);
+      $guest_types = $room['guest_types'] ?? ['single','couple','group'];
+      if (!is_array($guest_types)) {
+        $guest_types = array_map('trim', explode(',', (string)$guest_types));
+      }
+      $guest_types = array_values(array_intersect(['single','couple','group'], array_map('strval', $guest_types)));
+      if (empty($guest_types)) $guest_types = ['single','couple','group'];
       $booking_type = (($room['booking_type'] ?? 'per_person') === 'entire_room') ? 'entire_room' : 'per_person';
       $images = [];
       if (!empty($room['images']) && is_array($room['images'])) {
@@ -301,6 +311,7 @@ class RBW_Availability {
         'price_couple' => $ppn_couple,
         'price_group' => $ppn_group,
         'deposit' => $deposit,
+        'guest_types' => $guest_types,
         'nights' => $n,
         'total' => $total,
         'balance' => max(0, $total - $deposit),

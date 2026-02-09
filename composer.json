@@ -1,0 +1,6 @@
+{
+    "require": {
+        "mpdf/mpdf": "^8.2",
+        "yahnis-elsts/plugin-update-checker": "^5.6"
+    }
+}

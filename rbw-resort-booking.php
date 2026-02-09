@@ -3,7 +3,7 @@
  * Plugin Name: Resort Booking
  * Plugin URI: https://onvirtualworld.com
  * Description: A plugin to manage resort bookings.
- * Version: 1.0.4
+ * Version: 1.0.5
  * Author: Showrab Mojumdar
  * Author URI: https://github.com/ShowrabM/resort-booking
  * License: GPL2
@@ -12,7 +12,26 @@
 
 if (!defined('ABSPATH')) exit;
 
-define('RBW_VERSION', '1.0.4');
+// Composer autoload (Plugin Update Checker)
+if (file_exists(__DIR__ . '/vendor/autoload.php')) {
+  require_once __DIR__ . '/vendor/autoload.php';
+}
+
+if (class_exists('\YahnisElsts\PluginUpdateChecker\v5\PucFactory')) {
+  $updateChecker = \YahnisElsts\PluginUpdateChecker\v5\PucFactory::buildUpdateChecker(
+    'https://github.com/ShowrabM/resort-booking/', // your GitHub repo
+    __FILE__,
+    'resort-booking'
+  );
+
+  // Change to 'master' if your repo uses master
+  $updateChecker->setBranch('main');
+
+  // Recommended: only update when you publish a GitHub Release
+  $updateChecker->getVcsApi()->enableReleaseAssets();
+}
+
+define('RBW_VERSION', '1.0.5');
 define('RBW_PLUGIN_DIR', plugin_dir_path(__FILE__));
 define('RBW_PLUGIN_URL', plugin_dir_url(__FILE__));
 
@@ -98,6 +117,20 @@ add_shortcode('resort_booking', function($atts = []){
   if ($room !== '') {
     $group = '';
   }
+  $group_advance_extra = 0;
+  if ($group !== '') {
+    $groups = get_option(RBW_Admin::OPT_GROUPS, []);
+    if (is_array($groups)) {
+      $group_code = sanitize_title($group);
+      foreach ($groups as $g) {
+        if (!is_array($g)) continue;
+        $gcode = sanitize_title((string)($g['code'] ?? ($g['name'] ?? '')));
+        if ($gcode === '' || $gcode !== $group_code) continue;
+        $group_advance_extra = max(0, (float)($g['advance_extra'] ?? 0));
+        break;
+      }
+    }
+  }
 
   wp_enqueue_style('rbw-booking');
   wp_enqueue_script('rbw-booking');
@@ -107,7 +140,8 @@ $id = uniqid('rbw_', true);
 ob_start(); ?>
   <div class="rbw-wrap" data-rbw-widget="<?php echo esc_attr($id); ?>"
     <?php if($group!=='') echo 'data-rbw-group="'.esc_attr($group).'"'; ?>
-    <?php if($room!=='') echo 'data-rbw-room="'.esc_attr($room).'"'; ?>>
+    <?php if($room!=='') echo 'data-rbw-room="'.esc_attr($room).'"'; ?>
+    <?php if($group!=='' && $group_advance_extra > 0) echo 'data-rbw-group-advance="'.esc_attr($group_advance_extra).'"'; ?>>
     <button type="button" class="rbw-btn" data-rbw-open>Book Now</button>
 
     <div class="rbw-backdrop" data-rbw-backdrop aria-hidden="true">
@@ -186,5 +220,6 @@ add_action('wp_enqueue_scripts', function(){
     'nonce' => wp_create_nonce('rbw_nonce'),
     'currencyCode' => function_exists('get_woocommerce_currency') ? get_woocommerce_currency() : '',
     'currencySymbol' => function_exists('get_woocommerce_currency_symbol') ? get_woocommerce_currency_symbol(function_exists('get_woocommerce_currency') ? get_woocommerce_currency() : '') : '',
+    'fullGroupTooltip' => __('All rooms in this group are booked on this date.', 'rbw'),
   ]);
 });

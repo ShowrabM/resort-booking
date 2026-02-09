@@ -7,6 +7,8 @@ class RBW_Ajax {
     add_action('wp_ajax_nopriv_rbw_get_availability', [__CLASS__, 'get_availability']);
     add_action('wp_ajax_rbw_create_booking', [__CLASS__, 'create_booking']);
     add_action('wp_ajax_nopriv_rbw_create_booking', [__CLASS__, 'create_booking']);
+    add_action('wp_ajax_rbw_group_full_days', [__CLASS__, 'group_full_days']);
+    add_action('wp_ajax_nopriv_rbw_group_full_days', [__CLASS__, 'group_full_days']);
   }
 
   public static function get_availability(){
@@ -76,8 +78,23 @@ class RBW_Ajax {
       wp_send_json_error(['message'=>'Missing required data']);
     }
 
+    $group_code = sanitize_title((string)($_POST['group'] ?? ''));
+    $group_advance_extra = 0;
+    if ($group_code !== '') {
+      $groups = get_option(RBW_Admin::OPT_GROUPS, []);
+      if (is_array($groups)) {
+        foreach ($groups as $g) {
+          if (!is_array($g)) continue;
+          $gcode = sanitize_title((string)($g['code'] ?? ($g['name'] ?? '')));
+          if ($gcode === '' || $gcode !== $group_code) continue;
+          $group_advance_extra = max(0, (float)($g['advance_extra'] ?? 0));
+          break;
+        }
+      }
+    }
+
     // Hard availability check
-    $available = RBW_Availability::get_available($check_in, $check_out);
+    $available = RBW_Availability::get_available($check_in, $check_out, $group_code, '');
     $by_id = [];
     foreach ($available as $r){
       $by_id[(string)$r['room_id']] = $r;
@@ -91,11 +108,21 @@ class RBW_Ajax {
     $balance = 0;
     $rooms_payload = [];
     $remaining = $guests;
+    $has_deposit_setting = false;
+    $room_deposit_sum = 0;
 
     foreach ($rooms_in as $rsel){
       $rid = sanitize_text_field($rsel['room_id'] ?? '');
       if (!$rid || empty($by_id[$rid])) continue;
       $r = $by_id[$rid];
+      $allowed_types = $r['guest_types'] ?? [];
+      if (!is_array($allowed_types)) {
+        $allowed_types = array_map('trim', explode(',', (string)$allowed_types));
+      }
+      $allowed_types = array_values(array_intersect(['single','couple','group'], array_map('strval', $allowed_types)));
+      if (!empty($allowed_types) && !in_array($guest_type, $allowed_types, true)) {
+        wp_send_json_error(['message'=>'Selected room is not available for this guest type.']);
+      }
       if ($guest_type === 'single') {
         $capacity = 1;
       } elseif ($guest_type === 'couple') {
@@ -118,6 +145,8 @@ class RBW_Ajax {
         $ppn = $ppn_group > 0 ? $ppn_group : $ppn_single;
       }
       $deposit_setting = (float)($r['deposit'] ?? 0);
+      if ($deposit_setting > 0) $has_deposit_setting = true;
+      $room_deposit_sum += $deposit_setting;
       $booking_type = 'package';
 
       if ($guest_type === 'group') {
@@ -158,15 +187,23 @@ class RBW_Ajax {
 
     $room_name = $rooms_payload[0]['room_name'] ?? '';
     $rooms_count = count($rooms_payload);
+    $group_extra_applied = $group_code !== '' && $rooms_count > 1;
 
     // Enforce advance payment policy
     if ($pay_mode === 'deposit') {
-      if ($rooms_count > 1) {
-        $min_advance = $total * 0.5;
-        $pay_now = max($pay_now, $min_advance);
-      } elseif ($rooms_count === 1) {
-        $pay_now = min($total, 1000);
+      if (!$has_deposit_setting) {
+        if ($rooms_count === 1) {
+          $pay_now = min($total, 1000);
+        }
       }
+      if ($group_extra_applied) {
+        $pay_now = max(0, $pay_now - $room_deposit_sum);
+        $has_deposit_setting = false;
+      }
+      if ($group_extra_applied) {
+        $pay_now += ($group_advance_extra * ($rooms_count - 1));
+      }
+      if ($pay_now > $total) $pay_now = $total;
       $balance = max(0, $total - $pay_now);
     }
 
@@ -207,7 +244,7 @@ class RBW_Ajax {
         '_rbw_capacity' => 0,
         '_rbw_rooms_needed' => count($rooms_payload),
         '_rbw_booking_type' => 'multi',
-        '_rbw_rooms_json' => wp_json_encode($rooms_payload),
+        '_rbw_rooms_json' => wp_json_encode($rooms_payload, JSON_UNESCAPED_UNICODE),
         '_rbw_customer_name' => $customer_name,
         '_rbw_customer_phone' => $customer_phone,
         '_rbw_guests' => $guests,
@@ -218,6 +255,8 @@ class RBW_Ajax {
         '_rbw_discount' => $discount,
         '_rbw_pay_now' => $pay_now,
         '_rbw_deposit_setting' => $deposit_setting,
+        '_rbw_group_code' => $group_code,
+        '_rbw_group_advance_extra' => $group_advance_extra,
         '_rbw_status' => 'pending_payment',
       ]
     ]);
@@ -276,6 +315,8 @@ class RBW_Ajax {
         'deposit_setting' => 0,
         'deposit_total' => $pay_now,
         'rooms_json' => $rooms_payload,
+        'group_code' => $group_code,
+        'group_advance_extra' => $group_advance_extra,
       ]
     ];
 
@@ -302,6 +343,37 @@ class RBW_Ajax {
 
     $checkout = wc_get_checkout_url();
     wp_send_json_success(['checkout_url' => $checkout]);
+  }
+
+  public static function group_full_days(){
+    $group = sanitize_text_field($_POST['group'] ?? '');
+    if ($group === '') {
+      wp_send_json_success(['dates' => []]);
+    }
+    $year = absint($_POST['year'] ?? 0) ?: (int)date('Y');
+    $month = absint($_POST['month'] ?? 0);
+    if ($month < 1) $month = (int)date('n');
+    if ($month > 12) $month = 12;
+    $tz = new DateTimeZone('UTC');
+    $dates = [];
+    $daysInMonth = cal_days_in_month(CAL_GREGORIAN, $month, $year);
+    $base = new DateTime("$year-$month-01", $tz);
+    for ($day = 1; $day <= $daysInMonth; $day++) {
+      $current = clone $base;
+      $current->setDate($year, $month, $day);
+      $checkIn = $current->format('Y-m-d');
+      $checkOut = (clone $current)->modify('+1 day')->format('Y-m-d');
+      $rooms = RBW_Availability::get_available($checkIn, $checkOut, $group, '');
+      $hasAvailable = false;
+      foreach ($rooms as $room) {
+        if (($room['units_left'] ?? 0) > 0) {
+          $hasAvailable = true;
+          break;
+        }
+      }
+      $dates[$checkIn] = !$hasAvailable;
+    }
+    wp_send_json_success(['dates' => $dates]);
   }
 }
 

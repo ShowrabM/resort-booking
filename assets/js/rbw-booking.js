@@ -56,10 +56,12 @@
   };
 
   const SINGLE_ADVANCE = 1000;
-  const MULTI_MIN_ADVANCE_RATE = 0.5;
 
   widgets.forEach(widget => {
     const q = sel => widget.querySelector(sel);
+    const groupFilter = widget.getAttribute('data-rbw-group') || '';
+    const roomFilter = widget.getAttribute('data-rbw-room') || '';
+    const groupAdvanceExtra = Number(widget.getAttribute('data-rbw-group-advance') || 0);
 
     const formatMoney = (value) => {
       const n = Number(value) || 0;
@@ -186,6 +188,51 @@
       calEl.style.display = visible ? 'block' : 'none';
     };
 
+    const groupFullDays = new Set();
+    let lastGroupFetchKey = '';
+    const GROUP_FULL_TOOLTIP = RBW?.fullGroupTooltip || 'All rooms in this group are booked.';
+
+    const markGroupFullDays = () => {
+      if (!groupFilter) return;
+      const today = todayISO();
+      const buttons = calEl?.querySelectorAll('[data-cal-date]') || [];
+      buttons.forEach(btn => {
+        const iso = btn.getAttribute('data-cal-date') || '';
+        const isFull = iso && groupFullDays.has(iso) && iso >= today;
+        btn.classList.toggle('rbw-cal-full-group', !!isFull);
+        if (isFull) {
+          btn.setAttribute('title', GROUP_FULL_TOOLTIP);
+        } else {
+          btn.removeAttribute('title');
+        }
+      });
+    };
+
+    const fetchGroupFullDays = async (year, month) => {
+      if (!groupFilter || !calEl) return;
+      const key = `${year}-${String(month).padStart(2, '0')}`;
+      lastGroupFetchKey = key;
+      const fd = new FormData();
+      fd.append('action', 'rbw_group_full_days');
+      fd.append('group', groupFilter);
+      fd.append('year', String(year));
+      fd.append('month', String(month));
+      try {
+        const res = await fetchWithTimeout(RBW.ajaxUrl, { method: 'POST', credentials: 'same-origin', body: fd });
+        const json = await parseResponse(res);
+        if (!json.success) return;
+        if (lastGroupFetchKey !== key) return;
+        const dates = json.data?.dates || {};
+        groupFullDays.clear();
+        Object.keys(dates).forEach(date => {
+          if (dates[date]) groupFullDays.add(date);
+        });
+        markGroupFullDays();
+      } catch (e) {
+        console.error('[RBW] failed to load group availability', e);
+      }
+    };
+
     const isoFromParts = (y, m, d) => {
       const mm = String(m).padStart(2,'0');
       const dd = String(d).padStart(2,'0');
@@ -254,6 +301,10 @@
         btn.addEventListener('click', () => {
           const iso = btn.getAttribute('data-cal-date');
           if (!iso) return;
+          if (btn.classList.contains('rbw-cal-full-group')) {
+            showAlert('err', 'All rooms are booked.');
+            return;
+          }
           if (!calState.checkIn || (calState.checkIn && calState.checkOut)) {
             calState.checkIn = iso;
             calState.checkOut = '';
@@ -267,6 +318,8 @@
           renderCalendar();
         });
       });
+      markGroupFullDays();
+      fetchGroupFullDays(y, m);
     };
 
     if (calEl) {
@@ -352,7 +405,7 @@
       </div>
       <div class="rbw-paymode">
         <div class="rbw-paymode-title">Payment</div>
-        <div class="rbw-paymode-rule">Advance rule: 1 room = pay 1000 now. 2+ rooms = pay at least 50% now.</div>
+        <div class="rbw-paymode-rule">Advance rule: 1 room = pay 1000 now. Multiple rooms: advance set by admin.</div>
         <div class="rbw-paymode-grid">
           <label class="rbw-paycard" data-pay-card="deposit">
             <input type="radio" name="rbw_pay_mode" value="deposit" checked>
@@ -502,16 +555,45 @@
       mirrorGuestInputState();
     };
 
+    const normalizeGuestTypes = (types) => {
+      if (!Array.isArray(types)) {
+        if (typeof types === 'string') {
+          types = types.split(',').map(s => s.trim());
+        } else {
+          types = [];
+        }
+      }
+      const allowed = ['single', 'couple', 'group'];
+      const cleaned = types.map(t => String(t)).filter(t => allowed.includes(t));
+      return cleaned.length ? cleaned : allowed;
+    };
+
+    const roomAllowsGuestType = (room, guestType) => {
+      const types = normalizeGuestTypes(room?.guest_types);
+      return types.includes(guestType);
+    };
+
+    const anyRoomAllowsGuestType = (guestType) => {
+      return currentRooms.some(r => (Number(r.units_left) || 0) > 0 && roomAllowsGuestType(r, guestType));
+    };
+
     const getGuestTypeAvailability = (guests) => {
       const g = Number(guests) || 0;
+      const allowedByRooms = {
+        single: anyRoomAllowsGuestType('single'),
+        couple: anyRoomAllowsGuestType('couple'),
+        group: anyRoomAllowsGuestType('group')
+      };
       return {
-        single: g >= 1,
-        couple: g >= 2 && (g % 2 === 0),
-        group: g >= 3
+        single: g >= 1 && allowedByRooms.single,
+        couple: g >= 2 && (g % 2 === 0) && allowedByRooms.couple,
+        group: g >= 3 && allowedByRooms.group
       };
     };
 
     const pickFallbackGuestType = (prevType, availability) => {
+      const anyAvailable = Object.values(availability).some(Boolean);
+      if (!anyAvailable) return prevType;
       const orderByType = {
         single: ['couple', 'group', 'single'],
         couple: ['group', 'single', 'couple'],
@@ -584,6 +666,7 @@
     };
 
     const priceForGuestType = (room, guestType) => {
+      if (!roomAllowsGuestType(room, guestType)) return 0;
       const single = Number(room.price_single) || 0;
       const couple = Number(room.price_couple) || 0;
       const group = Number(room.price_group) || 0;
@@ -593,27 +676,31 @@
       return single;
     };
 
-    const computeTotals = (room, guests, payMode, guestType) => {
+    const computeTotals = (room, guests, payMode, guestType, useRoomDeposit = true) => {
       const ppn = priceForGuestType(room, guestType);
       const n = Number(room.nights) || 0;
       const needed = roomsNeeded(guests, guestType);
       const total = guestType === 'group' ? (ppn * n * guests) : (ppn * n * needed);
       const discount = payMode === 'full' ? total * 0.05 : 0;
       const depositSetting = Number(room.deposit) || 0;
-      const depositTotal = depositSetting * needed;
+      const depositTotal = useRoomDeposit ? (depositSetting * needed) : 0;
       const payNow = payMode === 'full' ? Math.max(0, total - discount) : depositTotal;
       const balance = payMode === 'full' ? 0 : Math.max(0, total - payNow);
       return { total, discount, payNow, balance, rooms_needed: needed, capacity: capacityForGuestType(guestType), deposit_total: depositTotal, booking_type: 'package' };
     };
 
-    const applyAdvancePolicy = (total, payNow, roomsCount, payMode) => {
+    const applyAdvancePolicy = (total, payNow, roomsCount, payMode, hasDepositSetting = false) => {
       if (payMode === 'full') return { payNow, balance: 0 };
+      if (hasDepositSetting) {
+        const adjusted = Math.min(payNow, total);
+        const balance = Math.max(0, total - adjusted);
+        return { payNow: adjusted, balance };
+      }
       let adjusted = payNow;
-      if (roomsCount > 1) {
-        adjusted = Math.max(payNow, total * MULTI_MIN_ADVANCE_RATE);
-      } else if (roomsCount === 1) {
+      if (roomsCount === 1) {
         adjusted = Math.min(total, SINGLE_ADVANCE);
       }
+      if (adjusted > total) adjusted = total;
       const balance = Math.max(0, total - adjusted);
       return { payNow: adjusted, balance };
     };
@@ -707,6 +794,19 @@
           submitBtn.disabled = true;
         }
       }
+      const chipsEl = listEl.querySelector('[data-rbw-chips]');
+      if (chipsEl) {
+        chipsEl.querySelectorAll('[data-chip]').forEach(chip => {
+          const rid = String(chip.getAttribute('data-chip') || '');
+          const room = currentRooms.find(r => String(r.room_id) === rid);
+          const unitsLeft = Number(room?.units_left) || 0;
+          const allowed = room ? roomAllowsGuestType(room, guestType) : false;
+          const disabled = unitsLeft <= 0 || !allowed;
+          chip.classList.toggle('disabled', disabled);
+          if (disabled) chip.setAttribute('disabled', 'disabled');
+          else chip.removeAttribute('disabled');
+        });
+      }
       if (guests <= 0 && selectedRoomIds.size > 0) {
         resetSelectedRooms();
       }
@@ -729,11 +829,13 @@
         const roomId = card.getAttribute('data-room');
         const room = currentRooms.find(x => String(x.room_id) === String(roomId));
         if (!room) return;
+        const allowedForType = roomAllowsGuestType(room, guestType);
         let totals;
         if (!multiMode) {
           totals = computeTotals(room, guests, payMode, getGuestType());
           if (payMode !== 'full') {
-            const adj = applyAdvancePolicy(totals.total, totals.payNow, 1, payMode);
+            const hasDepositSetting = (Number(totals.deposit_total) || 0) > 0;
+            const adj = applyAdvancePolicy(totals.total, totals.payNow, 1, payMode, hasDepositSetting);
             totals.payNow = adj.payNow;
             totals.balance = adj.balance;
           }
@@ -742,12 +844,16 @@
           const previewGuests = assigned > 0 ? assigned : Math.min(guests, capacityForGuestType(getGuestType()));
           totals = computeTotals(room, previewGuests, payMode, getGuestType());
         }
+        if (!allowedForType) {
+          totals = { ...totals, total: 0, discount: 0, payNow: 0, balance: 0, rooms_needed: 0 };
+        }
         const totalEl = card.querySelector('[data-total]');
         const ppnEl = card.querySelector('[data-ppn]');
         const payNowEl = card.querySelector('[data-pay-now]');
         const balanceEl = card.querySelector('[data-balance]');
         const discountEl = card.querySelector('[data-discount]');
         const discountRow = card.querySelector('[data-discount-row]');
+        card.classList.toggle('rbw-room-guest-disabled', !allowedForType);
         if (ppnEl) {
           setTextWithHighlight(ppnEl, Number(priceForGuestType(room, getGuestType())).toLocaleString());
         }
@@ -767,10 +873,12 @@
           }
         }
         const unitsLeft = Number(room.units_left) || 0;
-        const ok = multiMode ? (unitsLeft > 0) : (unitsLeft >= totals.rooms_needed);
+        const ok = allowedForType && (multiMode ? (unitsLeft > 0) : (unitsLeft >= totals.rooms_needed));
         card.classList.toggle('rbw-room-disabled', !ok);
         if (statusEl) {
-          if (!multiMode) {
+          if (!allowedForType) {
+            setTextWithHighlight(statusEl, 'Not available for selected guest type.');
+          } else if (!multiMode) {
             setTextWithHighlight(statusEl, ok ? `You need ${totals.rooms_needed} room(s)` : `Not enough rooms (need ${totals.rooms_needed})`);
           } else {
             const assigned = allocMap[String(roomId)] || 0;
@@ -806,7 +914,7 @@
         if (fullSave) fullSave.textContent = formatMoney(0);
       };
 
-      const updateSummary = (total, payNow, balance, discount, roomsCount, mode, guestsCount, nightsCount) => {
+      const updateSummary = (total, payNow, balance, discount, roomsCount, mode, guestsCount, nightsCount, hasDepositSetting = false, groupExtraApplied = false) => {
         const sumRoomsEl = bookingForm.querySelector('[data-sum-rooms]');
         const sumGuestsEl = bookingForm.querySelector('[data-sum-guests]');
         const sumNightsEl = bookingForm.querySelector('[data-sum-nights]');
@@ -823,10 +931,14 @@
             sumNoteEl.textContent = 'Select a room to see your total.';
           } else if (mode === 'full') {
             sumNoteEl.textContent = 'Full payment selected (5% discount applied).';
-          } else if (roomsCount > 1) {
-            sumNoteEl.textContent = 'Advance payment selected (min 50% for multiple rooms).';
-          } else {
+          } else if (groupExtraApplied) {
+            sumNoteEl.textContent = 'Advance payment set by admin for group booking.';
+          } else if (hasDepositSetting) {
+            sumNoteEl.textContent = 'Advance payment set by admin.';
+          } else if (roomsCount === 1) {
             sumNoteEl.textContent = 'Advance payment selected (1000 for single room).';
+          } else {
+            sumNoteEl.textContent = 'Advance payment selected.';
           }
         }
       };
@@ -843,7 +955,7 @@
           }
           setCalendarVisible(false);
           resetPayCards();
-          updateSummary(0, 0, 0, 0, 0, payMode, guests, currentRooms[0]?.nights || 0);
+          updateSummary(0, 0, 0, 0, 0, payMode, guests, currentRooms[0]?.nights || 0, false, false);
           updateVisibleCards();
           return;
         }
@@ -858,9 +970,11 @@
         let payNowFull = 0;
         let balanceFull = 0;
         const roomsPayload = [];
+        const groupExtraApplies = !!groupFilter && selectedRooms.length > 1;
         allocations.forEach(({ room, guests: g }) => {
           if (g <= 0) return;
-          const totalsDep = computeTotals(room, g, 'deposit', guestType);
+          const useRoomDeposit = !(groupExtraApplies);
+          const totalsDep = computeTotals(room, g, 'deposit', guestType, useRoomDeposit);
           const totalsFull = computeTotals(room, g, 'full', guestType);
           totalDep += totalsDep.total;
           discountDep += totalsDep.discount;
@@ -879,9 +993,17 @@
           });
         });
 
-        const depAdjusted = applyAdvancePolicy(totalDep, payNowDep, selectedRooms.length, 'deposit');
+        const anyDepositSetting = selectedRooms.some(r => (Number(r.deposit) || 0) > 0) && !groupExtraApplies;
+        const depAdjusted = applyAdvancePolicy(totalDep, payNowDep, selectedRooms.length, 'deposit', anyDepositSetting);
         payNowDep = depAdjusted.payNow;
         balanceDep = depAdjusted.balance;
+        const extraAdvance = (groupExtraApplies)
+          ? (groupAdvanceExtra * (selectedRooms.length - 1))
+          : 0;
+        if (extraAdvance > 0) {
+          payNowDep = Math.min(totalDep, payNowDep + extraAdvance);
+          balanceDep = Math.max(0, totalDep - payNowDep);
+        }
 
        
         showAllRooms = false;
@@ -909,7 +1031,9 @@
           selectedRooms.length,
           payMode,
           guests,
-          currentRooms[0]?.nights || 0
+          currentRooms[0]?.nights || 0,
+          anyDepositSetting,
+          groupExtraApplies
         );
         updateVisibleCards();
       } else {
@@ -920,7 +1044,7 @@
         setCalendarVisible(true);
         updateVisibleCards();
         resetPayCards();
-        updateSummary(0, 0, 0, 0, 0, payMode, guests, currentRooms[0]?.nights || 0);
+        updateSummary(0, 0, 0, 0, 0, payMode, guests, currentRooms[0]?.nights || 0, false, false);
       }
     };
 
@@ -992,6 +1116,7 @@
       fd.append('action', 'rbw_create_booking');
       fd.append('nonce', RBW.nonce);
       fd.append('rooms', JSON.stringify(bookingRoom.rooms || []));
+      if (groupFilter) fd.append('group', groupFilter);
       fd.append('check_in', toISO(inEl.value));
       fd.append('check_out', toISO(outEl.value));
       fd.append('nights', currentRooms[0]?.nights || 0);
@@ -1162,7 +1287,7 @@
       currentRooms = sortedRooms.slice();
       const availableRooms = sortedRooms.filter(r => (Number(r.units_left) || 0) > 0);
       if (!availableRooms.length) {
-        showAlert('err', `Sorry, we are not available from ${displayIn} to ${displayOut}.`);
+        showAlert('err', 'No rooms found for booking.');
       }
       const guestSetupHtml = `
         <div class="rbw-guest-type rbw-guest-type-inline" data-rbw-guest-type>
@@ -1307,6 +1432,11 @@
       updateVisibleCards = () => {
         const rooms = listEl.querySelectorAll('.rbw-room[data-room]');
         const selectedIds = new Set(Array.from(selectedRoomIds).map(String));
+        let firstVisibleId = null;
+        if (!showAllRooms && selectedIds.size === 0) {
+          const candidate = currentRooms.find(r => (Number(r.units_left) || 0) > 0 && roomAllowsGuestType(r, getGuestType()));
+          if (candidate) firstVisibleId = String(candidate.room_id);
+        }
         rooms.forEach((card, idx) => {
           const roomId = String(card.getAttribute('data-room') || '');
           if (showAllRooms) {
@@ -1314,7 +1444,8 @@
           } else if (selectedIds.size > 0) {
             card.classList.toggle('rbw-room-hidden', !selectedIds.has(roomId));
           } else {
-            card.classList.toggle('rbw-room-hidden', idx !== 0);
+            const visibleId = firstVisibleId || (rooms[0] ? String(rooms[0].getAttribute('data-room') || '') : '');
+            card.classList.toggle('rbw-room-hidden', roomId !== visibleId);
           }
         });
         const toggleBtn = listEl.querySelector('[data-rbw-show-all]');
@@ -1336,7 +1467,13 @@
         chipsEl.querySelectorAll('[data-chip]').forEach(chip => {
           chip.addEventListener('click', () => {
             if (chip.classList.contains('disabled')) {
-              showAlert('err', 'Already booked.');
+              const roomId = chip.getAttribute('data-chip');
+              const room = currentRooms.find(r => String(r.room_id) === String(roomId));
+              if (room && !roomAllowsGuestType(room, getGuestType())) {
+                showAlert('err', 'Not available for selected guest type.');
+              } else {
+                showAlert('err', 'Already booked.');
+              }
               return;
             }
             if (getGuests() <= 0) {
@@ -1377,6 +1514,10 @@
       listEl.querySelectorAll('.rbw-room[data-room]').forEach(card => {
         card.addEventListener('click', () => {
           clearAlert();
+          if (card.classList.contains('rbw-room-guest-disabled')) {
+            showAlert('err', 'Not available for selected guest type.');
+            return;
+          }
           if (card.classList.contains('rbw-room-disabled')) {
             showAlert('err', 'Already booked.');
             return;
@@ -1426,7 +1567,7 @@
       });
 
       // Auto-select first room
-      const firstAvailable = sortedRooms.find(r => (Number(r.units_left) || 0) > 0);
+      const firstAvailable = sortedRooms.find(r => (Number(r.units_left) || 0) > 0 && roomAllowsGuestType(r, getGuestType()));
       if (firstAvailable) {
         selectedRoomIds = new Set([String(firstAvailable.room_id)]);
         const firstCard = listEl.querySelector(`.rbw-room[data-room="${firstAvailable.room_id}"]`);
@@ -1481,8 +1622,6 @@
       fd.append('nonce', RBW.nonce);
       fd.append('check_in', checkInISO);
       fd.append('check_out', checkOutISO);
-      const groupFilter = widget.getAttribute('data-rbw-group');
-      const roomFilter = widget.getAttribute('data-rbw-room');
       if(roomFilter) {
         fd.append('room', roomFilter);
       } else if(groupFilter) {
@@ -1500,7 +1639,7 @@
 
         const rooms = json.data.rooms || [];
         if(!rooms.length){
-          showAlert('err', 'No rooms available for these dates.');
+          showAlert('err', 'No rooms found for booking.');
           return;
         }
 
