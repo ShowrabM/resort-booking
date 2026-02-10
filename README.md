@@ -47,3 +47,13 @@ Version: 1.0.5
 
 - Room pricing is per guest per night.
 - Room capacity is configured per room in the admin.
+
+## Release packaging
+
+To keep the plugin zip small and avoid heavy server unzip load, use the release packer script:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tools\build-release.ps1
+```
+
+This excludes `.git` and the mPDF bundled fonts (`vendor/mpdf/mpdf/ttfonts`) from the release archive. The invoice PDF uses only `assets/fonts/SolaimanLipi.ttf`, so removing the bundled fonts is safe for this plugin.

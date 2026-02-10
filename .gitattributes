@@ -1,0 +1,8 @@
+# Exclude large or non-release assets from GitHub "Download ZIP" (git archive).
+/.gitignore export-ignore
+/.gitattributes export-ignore
+/tools export-ignore
+/vendor/mpdf/mpdf/ttfonts export-ignore
+/vendor/mpdf/mpdf/ttfontdata export-ignore
+/vendor/mpdf/mpdf/tmp export-ignore
+/vendor/mpdf/mpdf/.github export-ignore

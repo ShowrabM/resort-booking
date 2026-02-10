@@ -2199,7 +2199,7 @@ class RBW_Admin {
     ob_start();
     ?>
     <!doctype html>
-    <html lang="en">
+    <html lang="bn">
     <head>
       <meta charset="<?php echo esc_attr(get_bloginfo('charset')); ?>">
       <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -2215,7 +2215,7 @@ class RBW_Admin {
           --rbw-invoice-accent: <?php echo esc_html($invoice_accent); ?>;
           --rbw-invoice-watermark-opacity: <?php echo esc_html(number_format((float)$invoice_watermark_opacity, 2, '.', '')); ?>;
         }
-        body{ margin:0; background:#f3f4f6; font-family: 'SolaimanLipi', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif; color:#111827; }
+        body{ margin:0; background:#f3f4f6; font-family: 'SolaimanLipi'; color:#111827; }
         .wrap{ max-width: 900px; margin: 18px auto; padding: 0 14px; }
         .bar{ margin-bottom: 10px; display:flex; gap:10px; justify-content:flex-end; }
         .bar a, .bar button{
@@ -2438,23 +2438,34 @@ class RBW_Admin {
       $cached = false;
       return $cached;
     }
+    $font_file = RBW_PLUGIN_DIR . 'assets/fonts/SolaimanLipi.ttf';
+    if (!is_file($font_file)) {
+      $cached = false;
+      return $cached;
+    }
     require_once $autoload;
     try {
-      $configVars = new \Mpdf\Config\ConfigVariables();
-      $fontDirs = $configVars->getDefaults()['fontDir'];
-      $fontDirs[] = RBW_PLUGIN_DIR . 'assets/fonts';
-      $fontVars = new \Mpdf\Config\FontVariables();
-      $fontData = $fontVars->getDefaults()['fontdata'];
-      $fontData['solaimanlipi'] = [
-        'R' => 'SolaimanLipi.ttf',
+      $fontDirs = [RBW_PLUGIN_DIR . 'assets/fonts'];
+      $fontData = [
+        'solaimanlipi' => [
+          'R' => 'SolaimanLipi.ttf',
+          'B' => 'SolaimanLipi.ttf',
+          'I' => 'SolaimanLipi.ttf',
+          'BI' => 'SolaimanLipi.ttf',
+          'useOTL' => 0xFF,
+        ],
       ];
       $cached = new \Mpdf\Mpdf([
         'mode' => 'utf-8',
         'format' => 'A4',
         'default_font' => 'solaimanlipi',
+        'autoScriptToLang' => false,
+        'autoLangToFont' => false,
+        'useSubstitutions' => false,
         'fontDir' => $fontDirs,
         'fontdata' => $fontData,
       ]);
+      $cached->SetFont('solaimanlipi', '', 0, true);
     } catch (\Throwable $e) {
       error_log('[RBW] mpdf init failed: ' . $e->getMessage());
       $cached = false;
