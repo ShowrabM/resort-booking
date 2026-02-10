@@ -232,7 +232,7 @@ class RBW_Admin {
             'price_single' => 0,
             'price_couple' => 0,
             'price_group' => 0,
-            'stock' => 1,
+            'stock' => 0,
           ];
         }
 
@@ -326,7 +326,7 @@ class RBW_Admin {
         'price_group' => $price_group,
         'image' => $images[0] ?? '',
         'images' => $images,
-        'stock' => max(1, (int)($room['stock'] ?? 1)),
+        'stock' => max(0, (int)($room['stock'] ?? 0)),
         'capacity' => 4,
         'deposit' => 0,
         'guest_types' => ['single','couple','group'],
@@ -496,7 +496,7 @@ class RBW_Admin {
       }
       $images = array_values(array_unique($images));
       $image = $images[0] ?? '';
-      $stock = isset($item['stock']) ? intval($item['stock']) : 1;
+      $stock = isset($item['stock']) ? intval($item['stock']) : 0;
       $capacity = isset($item['capacity']) ? intval($item['capacity']) : 0;
       $deposit = isset($item['deposit']) ? floatval($item['deposit']) : 0;
       $guest_types = [];
@@ -1263,7 +1263,7 @@ class RBW_Admin {
               <label><input type="checkbox" name="${opt}[${i}][guest_types][]" value="group" checked> <?php echo esc_html__('Group', 'rbw'); ?></label>
             </td>
             <td><input type="number" step="0.01" min="0" name="${opt}[${i}][deposit]" value="0"></td>
-            <td><input type="number" step="1" min="0" name="${opt}[${i}][stock]" value="1"></td>
+            <td><input type="number" step="1" min="0" name="${opt}[${i}][stock]" value="0"></td>
             <td class="rbw-img-cell">
               <div class="rbw-img-preview-list" data-rbw-image-preview-list>
                 <div class="rbw-img-empty"><?php esc_html_e('No image selected', 'rbw'); ?></div>
@@ -1992,7 +1992,7 @@ class RBW_Admin {
     $price_single = esc_attr($room['price_single'] ?? 0);
     $price_couple = esc_attr($room['price_couple'] ?? 0);
     $price_group = esc_attr($room['price_group'] ?? 0);
-    $stock = esc_attr($room['stock'] ?? 1);
+    $stock = esc_attr($room['stock'] ?? 0);
     $deposit = esc_attr($room['deposit'] ?? 0);
     $guest_types = $room['guest_types'] ?? ['single','couple','group'];
     if (!is_array($guest_types)) {

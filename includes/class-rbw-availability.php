@@ -256,9 +256,9 @@ class RBW_Availability {
         if (!$raw_match && !$slug_match && !$norm_match) continue;
       }
 
-      // Legacy DB compatibility: treat missing/invalid stock as 1 room unit.
+      // Legacy DB compatibility: treat missing/invalid stock as 0 room units.
       if (!isset($room['stock']) || $room['stock'] === '' || !is_numeric($room['stock'])) {
-        $stock = 1;
+        $stock = 0;
       } else {
         $stock = (int)$room['stock'];
       }
