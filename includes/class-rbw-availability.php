@@ -15,7 +15,7 @@ class RBW_Availability {
     }
   }
 
-  public static function get_available($check_in, $check_out, $only_group='', $only_room=''){
+  public static function get_available($check_in, $check_out, $only_group='', $only_room='', $exclude_booking_ids = []){
     $n = self::nights($check_in, $check_out);
     if ($n <= 0) return [];
 
@@ -117,6 +117,14 @@ class RBW_Availability {
         ['key' => '_rbw_check_out', 'value' => $check_in, 'compare' => '>']
       ]
     ];
+    if (!empty($exclude_booking_ids) && is_array($exclude_booking_ids)) {
+      $exclude = array_values(array_filter(array_map('absint', $exclude_booking_ids), function($id){
+        return $id > 0;
+      }));
+      if (!empty($exclude)) {
+        $args['post__not_in'] = $exclude;
+      }
+    }
     $booked_ids = get_posts($args);
     $booked_counts = [];
     foreach ($booked_ids as $pid){

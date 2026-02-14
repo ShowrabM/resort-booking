@@ -130,11 +130,21 @@ class RBW_WooCommerce {
   }
 
   public static function hard_check(){
+    $exclude_booking_ids = [];
+    foreach (WC()->cart->get_cart() as $cart_item) {
+      if (empty($cart_item['rbw'])) continue;
+      $booking_id = absint($cart_item['rbw']['booking_id'] ?? 0);
+      if ($booking_id > 0) $exclude_booking_ids[] = $booking_id;
+    }
+    if (!empty($exclude_booking_ids)) {
+      $exclude_booking_ids = array_values(array_unique($exclude_booking_ids));
+    }
+
     foreach (WC()->cart->get_cart() as $item){
       if (empty($item['rbw'])) continue;
       $b = $item['rbw'];
 
-      $rooms = RBW_Availability::get_available($b['check_in'], $b['check_out']);
+      $rooms = RBW_Availability::get_available($b['check_in'], $b['check_out'], '', '', $exclude_booking_ids);
       $units_left_by_room = [];
       foreach ($rooms as $r) {
         $rid = (string)($r['room_id'] ?? '');
