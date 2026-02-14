@@ -368,10 +368,10 @@
       showAllRooms = false;
       selectedGuestType = 'single';
       listGuestsInput = null;
-      guestsInput.value = 1;
+      guestsInput.value = '0';
       clearBookingFormErrors();
       clearDateErrors();
-      applyGuestTypeToGuests(selectedGuestType);
+      applyGuestTypeToGuests(selectedGuestType, false);
       setCalendarVisible(true);
     };
 
@@ -400,7 +400,7 @@
       <div class="rbw-form-grid">
         <label>Your Name*<input type="text" name="rbw_name" required></label>
         <label>Mobile Number*<input type="number" inputmode="numeric" pattern="[0-9]*" name="rbw_phone" required></label>
-        <input type="hidden" min="1" value="1" name="rbw_guests" required>
+        <input type="hidden" min="0" value="0" name="rbw_guests" required>
         <label>NID, Driving License, Card*<input type="file" accept="image/*" capture="environment" name="rbw_nid" required></label>
       </div>
       <div class="rbw-paymode">
@@ -467,7 +467,7 @@
         <div class="rbw-summary-card rbw-summary-remaining">
           <div class="rbw-summary-section"><span class="rbw-ico">✅</span> Remaining Amount</div>
           <div class="rbw-summary-row">
-            <span>Balance Payable at Check-in</span>
+            <span>Due at Check-in</span>
             <b data-sum-balance>0</b>
           </div>
         </div>
@@ -768,11 +768,21 @@
       const sumDiscRow = bookingForm.querySelector('[data-sum-discount-row]');
       const sumNoteEl = bookingForm.querySelector('[data-sum-note]');
       const sumGuestTypeEl = bookingForm.querySelector('[data-sum-guest-type]');
+      const guestCountWrap = listEl.querySelector('.rbw-guest-count');
+      const guestInputWrap = listEl.querySelector('.rbw-guest-input-wrap');
+      const guestRequiredHint = listEl.querySelector('[data-rbw-guest-required-hint]');
       listEl.querySelectorAll('.rbw-guest-type-card').forEach(card => {
         const type = card.getAttribute('data-guest-type');
         card.classList.toggle('active', type === guestType && !card.classList.contains('disabled'));
       });
       const detectEl = listEl.querySelector('[data-rbw-rooms-detect]');
+      if (listGuestsInput) {
+        const needsInput = guests <= 0;
+        listGuestsInput.classList.toggle('rbw-input-error', needsInput);
+        if (guestCountWrap) guestCountWrap.classList.toggle('rbw-guest-cue', needsInput);
+        if (guestInputWrap) guestInputWrap.classList.toggle('rbw-guest-cue', needsInput);
+        if (guestRequiredHint) guestRequiredHint.classList.toggle('show', needsInput);
+      }
       if (detectEl) {
         if (guests <= 0) {
           setTextWithHighlight(detectEl, 'Enter at least 1 guest to enable booking options.');
@@ -1289,6 +1299,8 @@
       if (!availableRooms.length) {
         showAlert('err', 'No rooms found for booking.');
       }
+      const guestsValue = String(getGuests());
+      const guestNeedsInput = getGuests() <= 0;
       const guestSetupHtml = `
         <div class="rbw-guest-type rbw-guest-type-inline" data-rbw-guest-type>
           <div class="rbw-guest-setup-top">
@@ -1296,13 +1308,14 @@
               <div class="rbw-guest-type-title">Step 1: Enter Guest Number</div>
               <div class="rbw-guest-step-sub">Tell us total guests first. System will suggest room count.</div>
             </div>
-            <label class="rbw-guest-count">
+            <label class="rbw-guest-count ${guestNeedsInput ? 'rbw-guest-cue' : ''}">
               <span>Total Guests</span>
-              <div class="rbw-guest-input-wrap">
+              <div class="rbw-guest-input-wrap ${guestNeedsInput ? 'rbw-guest-cue' : ''}">
                 <button type="button" class="rbw-guest-adjust" data-rbw-guest-adjust="-1" aria-label="Decrease guest count">-</button>
-                <input type="number" min="0" step="1" value="${Number(getGuests() || 0)}" data-rbw-guests required>
+                <input type="number" min="0" step="1" value="${guestsValue}" placeholder="Enter guest number" data-rbw-guests required>
                 <button type="button" class="rbw-guest-adjust" data-rbw-guest-adjust="1" aria-label="Increase guest count">+</button>
               </div>
+              <div class="rbw-guest-required-hint ${guestNeedsInput ? 'show' : ''}" data-rbw-guest-required-hint>Required: Enter total guests to continue.</div>
             </label>
           </div>
           <div class="rbw-guest-type-title">Step 2: Select Guest Type</div>
@@ -1339,8 +1352,8 @@
         <div class="rbw-room-toggle">
           <button type="button" class="rbw-show-all" data-rbw-show-all>Show all rooms</button>
         </div>
-      ` + sortedRooms.map((r, idx) => `
-        <div class="rbw-room ${idx === 0 ? 'active' : ''} ${r.units_left <= 0 ? 'rbw-room-disabled rbw-room-booked' : ''}" data-room="${r.room_id}">
+      ` + sortedRooms.map((r) => `
+        <div class="rbw-room ${r.units_left <= 0 ? 'rbw-room-disabled rbw-room-booked' : ''}" data-room="${r.room_id}">
           <div class="rbw-room-media">
             ${renderRoomMedia(r)}
           </div>
@@ -1353,11 +1366,11 @@
             <div class="rbw-meta">
               <div>Per night: <b data-ppn>${Number(r.price_per_night).toLocaleString()}</b></div>
               <div>Nights: <b>${Number(r.nights).toLocaleString()}</b></div>
-              <div data-rooms-status>Need 1 room(s)</div>
+              <div data-rooms-status>Enter guest number first.</div>
               <div>Total: <b class="rbw-amt rbw-amt-total" data-total>${Number(r.total).toLocaleString()}</b></div>
               <div data-discount-row hidden>Discount: <b class="rbw-amt rbw-amt-discount" data-discount>0</b></div>
               <div>Pay Now: <b class="rbw-amt rbw-amt-pay" data-pay-now>${Number(r.deposit).toLocaleString()}</b></div>
-              <div>Balance: <b class="rbw-amt rbw-amt-balance" data-balance>${Number(r.balance).toLocaleString()}</b></div>
+              <div>Due: <b class="rbw-amt rbw-amt-balance" data-balance>${Number(r.balance).toLocaleString()}</b></div>
               <div>Rooms Needed: <b data-rooms-needed>1</b></div>
               <div>Dates: <b>${displayIn} -> ${displayOut}</b></div>
             </div>
@@ -1369,9 +1382,10 @@
       const chipsEl = listEl.querySelector('[data-rbw-chips]');
       listGuestsInput = listEl.querySelector('[data-rbw-guests]');
       if (listGuestsInput) {
+        if (getGuests() <= 0) listGuestsInput.classList.add('rbw-input-error');
         listGuestsInput.addEventListener('input', () => {
           listGuestsInput.classList.remove('rbw-input-error');
-          guestsInput.value = listGuestsInput.value !== '' ? listGuestsInput.value : '0';
+          guestsInput.value = listGuestsInput.value !== '' ? listGuestsInput.value : '';
           applyGuestTypeToGuests(getGuestType(), false);
           syncGuestTypeOptions(true);
           updatePricingForGuests();
@@ -1423,6 +1437,10 @@
         if (!selectedWrap) return;
         const selected = currentRooms.filter(r => selectedRoomIds.has(String(r.room_id)));
         if (!selected.length) {
+          if (getGuests() <= 0) {
+            selectedWrap.textContent = 'Selected rooms: Enter guest number first.';
+            return;
+          }
           selectedWrap.textContent = 'Selected rooms: None';
           return;
         }
@@ -1566,19 +1584,7 @@
         });
       });
 
-      // Auto-select first room
-      const firstAvailable = sortedRooms.find(r => (Number(r.units_left) || 0) > 0 && roomAllowsGuestType(r, getGuestType()));
-      if (firstAvailable) {
-        selectedRoomIds = new Set([String(firstAvailable.room_id)]);
-        const firstCard = listEl.querySelector(`.rbw-room[data-room="${firstAvailable.room_id}"]`);
-        if (firstCard) firstCard.classList.add('active');
-        if (chipsEl) {
-          const firstChip = chipsEl.querySelector(`[data-chip="${firstAvailable.room_id}"]`);
-          if (firstChip) firstChip.classList.add('active');
-        }
-        updateVisibleCards();
-      }
-      bookingForm.style.display = 'block';
+      bookingForm.style.display = 'none';
       updatePricingForGuests();
     };
 
@@ -1645,7 +1651,9 @@
 
         renderRooms(rooms, checkInISO, checkOutISO);
         setStep(2);
-        showAlert('ok', 'Rooms available. Select a room and complete the form.');
+        showAlert('ok', getGuests() > 0
+          ? 'Rooms available. Select a room and complete the form.'
+          : 'Rooms available. Enter total guests to continue.');
       }catch(e){
         handleError(e, 'Availability');
       }

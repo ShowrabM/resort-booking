@@ -25,6 +25,7 @@ class RBW_Admin {
     add_action('admin_init', [__CLASS__, 'register_settings']);
     add_action('init', [__CLASS__, 'register_booking_cpt']);
     add_action('admin_post_rbw_cancel_booking', [__CLASS__, 'cancel_booking']);
+    add_action('admin_post_rbw_retry_sms', [__CLASS__, 'retry_sms']);
     add_action('admin_post_rbw_invoice_booking', [__CLASS__, 'render_booking_invoice']);
     add_action('admin_post_rbw_customer_invoice', [__CLASS__, 'render_customer_booking_invoice']);
     add_action('admin_post_nopriv_rbw_customer_invoice', [__CLASS__, 'render_customer_booking_invoice']);
@@ -120,6 +121,132 @@ class RBW_Admin {
 
   public static function sanitize_checkbox($value){
     return empty($value) ? 0 : 1;
+  }
+
+  private static function sanitize_history_date($value){
+    $value = trim((string)$value);
+    if ($value === '') return '';
+    $ts = strtotime($value);
+    if ($ts === false) return '';
+    return gmdate('Y-m-d', $ts);
+  }
+
+  private static function shorten_text($text, $limit = 90){
+    $text = trim((string)$text);
+    if ($text === '') return '';
+    if (function_exists('mb_strlen') && function_exists('mb_substr')) {
+      if (mb_strlen($text) <= $limit) return $text;
+      return mb_substr($text, 0, $limit) . '...';
+    }
+    if (strlen($text) <= $limit) return $text;
+    return substr($text, 0, $limit) . '...';
+  }
+
+  private static function apply_history_status_filter(array $query_args, $status){
+    $status = sanitize_key((string)$status);
+    $today = current_time('Y-m-d');
+
+    if ($status === 'completed') {
+      $query_args['post_status'] = ['publish'];
+      $query_args['meta_query'] = [[
+        'key' => '_rbw_check_out',
+        'value' => $today,
+        'compare' => '<',
+        'type' => 'DATE',
+      ]];
+      return $query_args;
+    }
+
+    if ($status === 'publish') {
+      $query_args['post_status'] = ['publish'];
+      $query_args['meta_query'] = [
+        'relation' => 'OR',
+        [
+          'key' => '_rbw_check_out',
+          'value' => $today,
+          'compare' => '>=',
+          'type' => 'DATE',
+        ],
+        [
+          'key' => '_rbw_check_out',
+          'compare' => 'NOT EXISTS',
+        ],
+        [
+          'key' => '_rbw_check_out',
+          'value' => '',
+          'compare' => '=',
+        ],
+      ];
+      return $query_args;
+    }
+
+    $query_args['post_status'] = $status === 'all' ? ['publish', 'pending', 'trash'] : [$status];
+    return $query_args;
+  }
+
+  private static function get_booking_status_parts($post){
+    $post_status = get_post_status($post);
+    if ($post_status === 'pending') {
+      return ['key' => 'pending', 'label' => __('Pending', 'rbw')];
+    }
+    if ($post_status === 'trash') {
+      return ['key' => 'trash', 'label' => __('Cancelled', 'rbw')];
+    }
+    if ($post_status === 'publish') {
+      $check_out = self::sanitize_history_date(get_post_meta($post->ID, '_rbw_check_out', true));
+      $today = current_time('Y-m-d');
+      if ($check_out !== '' && $check_out < $today) {
+        return ['key' => 'completed', 'label' => __('Completed', 'rbw')];
+      }
+      return ['key' => 'publish', 'label' => __('Confirmed', 'rbw')];
+    }
+
+    return ['key' => 'unknown', 'label' => __('Unknown', 'rbw')];
+  }
+
+  private static function get_sms_status_parts($post){
+    $booking_id = (int)$post->ID;
+    if (!class_exists('RBW_SMS')) {
+      return ['key' => 'disabled', 'label' => __('Disabled', 'rbw'), 'detail' => '', 'type' => 'none'];
+    }
+
+    $post_status = get_post_status($post);
+    $confirm_enabled = (int)get_option(RBW_SMS::OPT_ENABLE, 0) === 1;
+    $cancel_enabled = method_exists('RBW_SMS', 'is_cancel_enabled') ? RBW_SMS::is_cancel_enabled() : false;
+
+    if ($post_status === 'trash') {
+      if (!$cancel_enabled) {
+        return ['key' => 'not_required', 'label' => __('Not Required', 'rbw'), 'detail' => '', 'type' => 'none'];
+      }
+      $sent_at = trim((string)get_post_meta($booking_id, '_rbw_sms_cancel_sent_at', true));
+      if ($sent_at !== '') {
+        return ['key' => 'sent', 'label' => __('Sent', 'rbw'), 'detail' => $sent_at, 'type' => 'cancel'];
+      }
+      $last_error = trim((string)get_post_meta($booking_id, '_rbw_sms_cancel_last_error', true));
+      if ($last_error !== '') {
+        return ['key' => 'failed', 'label' => __('Failed', 'rbw'), 'detail' => $last_error, 'type' => 'cancel'];
+      }
+      return ['key' => 'pending', 'label' => __('Not Sent', 'rbw'), 'detail' => '', 'type' => 'cancel'];
+    }
+
+    if ($post_status !== 'publish') {
+      return ['key' => 'waiting', 'label' => __('Waiting Payment', 'rbw'), 'detail' => '', 'type' => 'none'];
+    }
+    if (!$confirm_enabled) {
+      return ['key' => 'disabled', 'label' => __('Disabled', 'rbw'), 'detail' => '', 'type' => 'none'];
+    }
+
+    $sent_at = trim((string)get_post_meta($booking_id, '_rbw_sms_sent_at', true));
+    if ($sent_at !== '') {
+      return ['key' => 'sent', 'label' => __('Sent', 'rbw'), 'detail' => $sent_at, 'type' => 'booking'];
+    }
+
+    $last_error = trim((string)get_post_meta($booking_id, '_rbw_sms_last_error', true));
+    if ($last_error !== '') {
+      return ['key' => 'failed', 'label' => __('Failed', 'rbw'), 'detail' => $last_error, 'type' => 'booking'];
+    }
+
+    return ['key' => 'pending', 'label' => __('Not Sent', 'rbw'), 'detail' => '', 'type' => 'booking'];
   }
 
   private static function decode_rooms_meta($rooms_meta){
@@ -646,47 +773,127 @@ class RBW_Admin {
   }
 
   public static function render_bookings_page(){
+    $from_date = self::sanitize_history_date($_GET['from_date'] ?? '');
+    $to_date = self::sanitize_history_date($_GET['to_date'] ?? '');
+    $status = sanitize_key((string)($_GET['status'] ?? 'all'));
+    if (!in_array($status, ['all', 'publish', 'completed', 'pending', 'trash'], true)) $status = 'all';
+    $sort = strtolower(sanitize_text_field((string)($_GET['sort'] ?? 'desc')));
+    if (!in_array($sort, ['asc', 'desc'], true)) $sort = 'desc';
+
     $paged = max(1, intval($_GET['paged'] ?? 1));
     $per_page = 25;
-    $query = new WP_Query([
+    $query_args = [
       'post_type' => 'rbw_booking',
-      'post_status' => 'publish',
       'posts_per_page' => $per_page,
       'paged' => $paged,
       'orderby' => 'date',
-      'order' => 'DESC',
-    ]);
+      'order' => strtoupper($sort),
+    ];
+    $query_args = self::apply_history_status_filter($query_args, $status);
+    $date_query = [];
+    if ($from_date !== '') $date_query['after'] = $from_date;
+    if ($to_date !== '') $date_query['before'] = $to_date;
+    if (!empty($date_query)) {
+      $date_query['inclusive'] = true;
+      $date_query['column'] = 'post_date';
+      $query_args['date_query'] = [$date_query];
+    }
+
+    $query = new WP_Query($query_args);
     $total = $query->found_posts;
     $bookings = $query->posts;
+
+    $filter_args = ['page' => 'rbw-bookings'];
+    if ($from_date !== '') $filter_args['from_date'] = $from_date;
+    if ($to_date !== '') $filter_args['to_date'] = $to_date;
+    if ($status !== 'all') $filter_args['status'] = $status;
+    if ($sort !== 'desc') $filter_args['sort'] = $sort;
+
+    $current_url = add_query_arg(array_merge($filter_args, ['paged' => $paged]), admin_url('admin.php'));
+    $export_args = ['action' => 'rbw_export_bookings'];
+    if ($from_date !== '') $export_args['from_date'] = $from_date;
+    if ($to_date !== '') $export_args['to_date'] = $to_date;
+    if ($status !== 'all') $export_args['status'] = $status;
+    if ($sort !== 'desc') $export_args['sort'] = $sort;
+
+    $sms_notice = sanitize_key((string)($_GET['rbw_sms'] ?? ''));
+    $sms_notice_msg = sanitize_text_field((string)($_GET['rbw_sms_msg'] ?? ''));
     ?>
     <div class="wrap">
-      <h1><?php esc_html_e('Bookings', 'rbw'); ?> <span class="subtitle">(<?php echo intval($total); ?>)</span></h1>
-      <div style="margin: 10px 0 14px;">
-        <?php
-          $export_url = wp_nonce_url(
-            add_query_arg(['action' => 'rbw_export_bookings'], admin_url('admin-post.php')),
-            'rbw_export_bookings'
-          );
-        ?>
-        <a class="button button-primary" href="<?php echo esc_url($export_url); ?>">
-          <?php esc_html_e('Download Bookings CSV', 'rbw'); ?>
-        </a>
+      <h1><?php esc_html_e('Booking History', 'rbw'); ?> <span class="subtitle">(<?php echo intval($total); ?>)</span></h1>
+      <?php if ($sms_notice === 'sent'): ?>
+        <div class="notice notice-success is-dismissible"><p><?php esc_html_e('SMS sent successfully.', 'rbw'); ?></p></div>
+      <?php elseif ($sms_notice === 'error'): ?>
+        <div class="notice notice-error is-dismissible"><p><?php echo esc_html($sms_notice_msg !== '' ? $sms_notice_msg : __('SMS send failed.', 'rbw')); ?></p></div>
+      <?php elseif ($sms_notice === 'missing'): ?>
+        <div class="notice notice-warning is-dismissible"><p><?php esc_html_e('SMS module is not available.', 'rbw'); ?></p></div>
+      <?php endif; ?>
+
+      <div class="rbw-history-filters">
+        <form method="get" class="rbw-history-form">
+          <input type="hidden" name="page" value="rbw-bookings">
+          <label>
+            <span><?php esc_html_e('From', 'rbw'); ?></span>
+            <input type="date" name="from_date" value="<?php echo esc_attr($from_date); ?>">
+          </label>
+          <label>
+            <span><?php esc_html_e('To', 'rbw'); ?></span>
+            <input type="date" name="to_date" value="<?php echo esc_attr($to_date); ?>">
+          </label>
+          <label>
+            <span><?php esc_html_e('Status', 'rbw'); ?></span>
+            <select name="status">
+              <option value="all" <?php selected($status, 'all'); ?>><?php esc_html_e('All', 'rbw'); ?></option>
+              <option value="publish" <?php selected($status, 'publish'); ?>><?php esc_html_e('Confirmed', 'rbw'); ?></option>
+              <option value="completed" <?php selected($status, 'completed'); ?>><?php esc_html_e('Completed', 'rbw'); ?></option>
+              <option value="pending" <?php selected($status, 'pending'); ?>><?php esc_html_e('Pending', 'rbw'); ?></option>
+              <option value="trash" <?php selected($status, 'trash'); ?>><?php esc_html_e('Cancelled', 'rbw'); ?></option>
+            </select>
+          </label>
+          <label>
+            <span><?php esc_html_e('Sort', 'rbw'); ?></span>
+            <select name="sort">
+              <option value="desc" <?php selected($sort, 'desc'); ?>><?php esc_html_e('Newest First', 'rbw'); ?></option>
+              <option value="asc" <?php selected($sort, 'asc'); ?>><?php esc_html_e('Oldest First', 'rbw'); ?></option>
+            </select>
+          </label>
+          <button type="submit" class="button button-primary"><?php esc_html_e('Apply', 'rbw'); ?></button>
+          <a class="button" href="<?php echo esc_url(add_query_arg(['page' => 'rbw-bookings'], admin_url('admin.php'))); ?>"><?php esc_html_e('Reset', 'rbw'); ?></a>
+        </form>
+        <div class="rbw-history-actions">
+          <?php
+            $export_url = wp_nonce_url(
+              add_query_arg($export_args, admin_url('admin-post.php')),
+              'rbw_export_bookings'
+            );
+          ?>
+          <a class="button button-secondary" href="<?php echo esc_url($export_url); ?>">
+            <?php esc_html_e('Download Filtered CSV', 'rbw'); ?>
+          </a>
+        </div>
       </div>
+
       <?php if (empty($bookings)): ?>
-        <p><?php esc_html_e('No bookings found.', 'rbw'); ?></p>
+        <p class="rbw-history-empty"><?php esc_html_e('No booking history found for the selected filters.', 'rbw'); ?></p>
       <?php else: ?>
-        <div class="rbw-admin-table-wrap" style="overflow-x:auto;">
+        <div class="rbw-history-summary">
+          <?php echo esc_html(sprintf(__('Showing %d booking(s)', 'rbw'), (int)$total)); ?>
+        </div>
+        <div class="rbw-admin-table-wrap">
         <table class="widefat striped rbw-admin-table">
           <thead>
             <tr>
+              <th><?php esc_html_e('Booking ID', 'rbw'); ?></th>
               <th><?php esc_html_e('Created', 'rbw'); ?></th>
+              <th><?php esc_html_e('Status', 'rbw'); ?></th>
               <th><?php esc_html_e('Rooms', 'rbw'); ?></th>
               <th><?php esc_html_e('Guest', 'rbw'); ?></th>
               <th><?php esc_html_e('Phone', 'rbw'); ?></th>
               <th><?php esc_html_e('Guests', 'rbw'); ?></th>
               <th><?php esc_html_e('Dates', 'rbw'); ?></th>
-          <th><?php esc_html_e('Deposit', 'rbw'); ?></th>
-              <th><?php esc_html_e('Balance', 'rbw'); ?></th>
+              <th><?php esc_html_e('Deposit', 'rbw'); ?></th>
+              <th><?php esc_html_e('Due', 'rbw'); ?></th>
+              <th><?php esc_html_e('SMS', 'rbw'); ?></th>
               <th><?php esc_html_e('NID', 'rbw'); ?></th>
               <th><?php esc_html_e('Actions', 'rbw'); ?></th>
             </tr>
@@ -705,11 +912,20 @@ class RBW_Admin {
               $phone = get_post_meta($post->ID, '_rbw_customer_phone', true);
               $guests = get_post_meta($post->ID, '_rbw_guests', true);
               $nid = get_post_meta($post->ID, '_rbw_nid_url', true);
+              $status_parts = self::get_booking_status_parts($post);
+              $status_key = $status_parts['key'];
+              $status_label = $status_parts['label'];
+              $sms_parts = self::get_sms_status_parts($post);
+              $sms_key = $sms_parts['key'];
+              $sms_label = $sms_parts['label'];
+              $sms_detail = (string)$sms_parts['detail'];
+              $sms_type = (string)($sms_parts['type'] ?? 'none');
+              $sms_detail_short = self::shorten_text($sms_detail, 90);
               $cancel_url = wp_nonce_url(
                 add_query_arg([
                   'action' => 'rbw_cancel_booking',
                   'booking_id' => $post->ID,
-                  'redirect_to' => urlencode( admin_url('admin.php?page=rbw-bookings') ),
+                  'redirect_to' => urlencode($current_url),
                 ], admin_url('admin-post.php')),
                 'rbw_cancel_booking_'.$post->ID
               );
@@ -720,31 +936,61 @@ class RBW_Admin {
                 ], admin_url('admin-post.php')),
                 'rbw_invoice_booking_'.$post->ID
               );
+              $retry_sms_url = wp_nonce_url(
+                add_query_arg([
+                  'action' => 'rbw_retry_sms',
+                  'booking_id' => $post->ID,
+                  'sms_type' => $sms_type,
+                  'redirect_to' => urlencode($current_url),
+                ], admin_url('admin-post.php')),
+                'rbw_retry_sms_'.$post->ID
+              );
+              $can_retry_sms = class_exists('RBW_SMS')
+                && in_array($sms_type, ['booking', 'cancel'], true)
+                && in_array($sms_key, ['failed', 'pending'], true);
               ?>
               <tr>
+                <td class="rbw-booking-id">#<?php echo esc_html($post->ID); ?></td>
                 <td><?php echo esc_html(get_the_time(get_option('date_format') . ' ' . get_option('time_format'), $post)); ?></td>
+                <td><span class="rbw-status rbw-status-<?php echo esc_attr($status_key); ?>"><?php echo esc_html($status_label); ?></span></td>
                 <td class="rbw-room-cell" title="<?php echo esc_attr($room_display); ?>"><?php echo esc_html($room_display); ?></td>
                 <td><?php echo esc_html($guest); ?></td>
-                <td><a href="tel:<?php echo esc_attr($phone); ?>"><?php echo esc_html($phone); ?></a></td>
+                <td>
+                  <a class="rbw-phone-link" href="tel:<?php echo esc_attr($phone); ?>"><?php echo esc_html($phone); ?></a>
+                </td>
                 <td><?php echo esc_html($guests); ?></td>
                 <td><?php echo esc_html($check_in . ' -> ' . $check_out); ?></td>
                 <td><?php echo wc_price((float)$deposit); ?></td>
                 <td><?php echo wc_price((float)$balance); ?></td>
+                <td class="rbw-sms-cell">
+                  <span class="rbw-sms-status rbw-sms-status-<?php echo esc_attr($sms_key); ?>"><?php echo esc_html($sms_label); ?></span>
+                  <?php if ($sms_detail_short !== ''): ?>
+                    <div class="rbw-sms-meta" title="<?php echo esc_attr($sms_detail); ?>"><?php echo esc_html($sms_detail_short); ?></div>
+                  <?php endif; ?>
+                </td>
                 <td>
                   <?php if ($nid): ?>
-                    <a href="<?php echo esc_url($nid); ?>" target="_blank" rel="noopener"><?php esc_html_e('View', 'rbw'); ?></a>
+                    <a class="rbw-link-btn rbw-link-btn-neutral" href="<?php echo esc_url($nid); ?>" target="_blank" rel="noopener"><?php esc_html_e('View', 'rbw'); ?></a>
                   <?php else: ?>
                     &mdash;
                   <?php endif; ?>
                 </td>
-                <td>
-                  <a href="<?php echo esc_url($invoice_url); ?>" target="_blank" rel="noopener">
-                    <?php esc_html_e('Invoice', 'rbw'); ?>
-                  </a>
-                  &nbsp;|&nbsp;
-                  <a class="button-link-delete" href="<?php echo esc_url($cancel_url); ?>" onclick="return confirm('<?php echo esc_js(__('Cancel this booking? This will free the room availability.', 'rbw')); ?>');">
-                    <?php esc_html_e('Cancel', 'rbw'); ?>
-                  </a>
+                <td class="rbw-actions-cell">
+                  <div class="rbw-action-links">
+                    <a class="rbw-link-btn rbw-link-btn-primary" href="<?php echo esc_url($invoice_url); ?>" target="_blank" rel="noopener">
+                      <?php esc_html_e('Invoice', 'rbw'); ?>
+                    </a>
+                    <?php if ($can_retry_sms): ?>
+                      <a class="rbw-link-btn rbw-link-btn-neutral" href="<?php echo esc_url($retry_sms_url); ?>">
+                        <?php esc_html_e('Retry SMS', 'rbw'); ?>
+                      </a>
+                    <?php endif; ?>
+                    <?php if (!in_array($status_key, ['trash', 'completed'], true)): ?>
+                      <a class="rbw-link-btn rbw-link-btn-danger" href="<?php echo esc_url($cancel_url); ?>" onclick="return confirm('<?php echo esc_js(__('Cancel this booking? This will free the room availability.', 'rbw')); ?>');">
+                        <?php esc_html_e('Cancel', 'rbw'); ?>
+                      </a>
+                    <?php endif; ?>
+                  </div>
                 </td>
               </tr>
             <?php endforeach; ?>
@@ -753,22 +999,262 @@ class RBW_Admin {
         </div>
 
         <style>
-          .rbw-admin-table{ min-width: 960px; }
+          .rbw-history-filters{
+            display:flex;
+            justify-content:space-between;
+            align-items:flex-end;
+            gap:12px;
+            flex-wrap:wrap;
+            background:#ffffff;
+            border:1px solid #d8dde6;
+            border-radius:8px;
+            padding:12px;
+            margin:10px 0 14px;
+          }
+          .rbw-history-form{
+            display:flex;
+            align-items:flex-end;
+            gap:10px;
+            flex-wrap:wrap;
+          }
+          .rbw-history-form label{
+            display:grid;
+            gap:4px;
+            font-size:12px;
+            color:#4b5563;
+          }
+          .rbw-history-actions{
+            display:flex;
+            gap:8px;
+          }
+          .rbw-history-summary{
+            margin:8px 0 10px;
+            font-weight:600;
+            color:#1f2937;
+          }
+          .rbw-history-empty{
+            background:#fff;
+            border:1px solid #d8dde6;
+            border-radius:8px;
+            padding:14px;
+          }
+          .rbw-admin-table-wrap{
+            overflow-x:auto;
+            background:#f8fafc;
+            border:1px solid #d8dde6;
+            border-radius:8px;
+            padding:10px;
+          }
+          .rbw-admin-table{
+            min-width:1100px;
+            width:100%;
+            margin:0;
+            border-collapse:separate;
+            border-spacing:0;
+            border:1px solid #dfe3ea;
+            border-radius:6px;
+            overflow:hidden;
+            box-shadow:0 1px 3px rgba(15, 23, 42, 0.06);
+          }
+          .rbw-admin-table thead th{
+            background:#eef2f7;
+            color:#475569;
+            font-size:12px;
+            font-weight:700;
+            border-bottom:1px solid #dfe3ea;
+            padding:10px 12px;
+            white-space:nowrap;
+          }
+          .rbw-admin-table tbody td{
+            padding:10px 12px;
+            border-bottom:1px solid #edf1f6;
+            color:#1f2937;
+            vertical-align:middle;
+            background:#ffffff;
+          }
+          .rbw-admin-table tbody tr:nth-child(even) td{
+            background:#fbfcfe;
+          }
+          .rbw-admin-table tbody tr:hover td{
+            background:#f3f7fc;
+          }
+          .rbw-admin-table tbody tr:last-child td{
+            border-bottom:none;
+          }
+          .rbw-booking-id{
+            font-weight:700;
+            color:#0f172a;
+            white-space:nowrap;
+          }
           .rbw-room-cell{
-            max-width: 380px;
-            white-space: normal;
-            line-height: 1.35;
+            max-width:380px;
+            white-space:normal;
+            line-height:1.35;
+          }
+          .rbw-phone-link{
+            color:#2563eb;
+            text-decoration:none;
+            font-weight:600;
+          }
+          .rbw-phone-link:hover{
+            text-decoration:underline;
+          }
+          .rbw-status{
+            display:inline-flex;
+            align-items:center;
+            justify-content:center;
+            font-size:11px;
+            font-weight:700;
+            line-height:1;
+            border-radius:4px;
+            padding:5px 10px;
+            text-transform:none;
+            letter-spacing:0;
+            border:1px solid transparent;
+          }
+          .rbw-status-publish{
+            background:#dcfce7;
+            border-color:#86efac;
+            color:#166534;
+          }
+          .rbw-status-pending{
+            background:#ffedd5;
+            border-color:#fdba74;
+            color:#9a3412;
+          }
+          .rbw-status-trash{
+            background:#fee2e2;
+            border-color:#fecaca;
+            color:#991b1b;
+          }
+          .rbw-status-completed{
+            background:#dbeafe;
+            border-color:#93c5fd;
+            color:#1d4ed8;
+          }
+          .rbw-sms-cell{
+            min-width: 170px;
+          }
+          .rbw-sms-status{
+            display:inline-flex;
+            align-items:center;
+            justify-content:center;
+            font-size:11px;
+            font-weight:700;
+            line-height:1;
+            border-radius:4px;
+            padding:5px 10px;
+            border:1px solid transparent;
+          }
+          .rbw-sms-status-sent{
+            background:#dcfce7;
+            border-color:#86efac;
+            color:#166534;
+          }
+          .rbw-sms-status-failed{
+            background:#fee2e2;
+            border-color:#fecaca;
+            color:#991b1b;
+          }
+          .rbw-sms-status-pending{
+            background:#ffedd5;
+            border-color:#fdba74;
+            color:#9a3412;
+          }
+          .rbw-sms-status-waiting{
+            background:#e2e8f0;
+            border-color:#cbd5e1;
+            color:#334155;
+          }
+          .rbw-sms-status-disabled{
+            background:#e5e7eb;
+            border-color:#d1d5db;
+            color:#4b5563;
+          }
+          .rbw-sms-status-not_required{
+            background:#f1f5f9;
+            border-color:#cbd5e1;
+            color:#475569;
+          }
+          .rbw-sms-meta{
+            margin-top:4px;
+            font-size:11px;
+            color:#64748b;
+            line-height:1.3;
+          }
+          .rbw-actions-cell{
+            white-space:nowrap;
+          }
+          .rbw-action-links{
+            display:flex;
+            align-items:center;
+            gap:6px;
+            flex-wrap:wrap;
+          }
+          .rbw-link-btn{
+            display:inline-flex;
+            align-items:center;
+            justify-content:center;
+            min-height:28px;
+            padding:0 10px;
+            border:1px solid #cbd5e1;
+            border-radius:4px;
+            background:#ffffff;
+            color:#334155;
+            text-decoration:none;
+            font-size:12px;
+            font-weight:600;
+            box-sizing:border-box;
+          }
+          .rbw-link-btn:hover{
+            border-color:#94a3b8;
+            background:#f8fafc;
+            color:#0f172a;
+          }
+          .rbw-link-btn-primary{
+            border-color:#bfdbfe;
+            color:#1d4ed8;
+            background:#eff6ff;
+          }
+          .rbw-link-btn-primary:hover{
+            border-color:#93c5fd;
+            background:#dbeafe;
+            color:#1e3a8a;
+          }
+          .rbw-link-btn-danger{
+            border-color:#fecaca;
+            color:#b91c1c;
+            background:#fef2f2;
+          }
+          .rbw-link-btn-danger:hover{
+            border-color:#fca5a5;
+            background:#fee2e2;
+            color:#991b1b;
+          }
+          .rbw-link-btn-neutral{
+            border-color:#cbd5e1;
+            color:#475569;
+            background:#f8fafc;
           }
           @media (max-width: 782px){
-            .rbw-admin-table th, .rbw-admin-table td{ white-space: nowrap; }
-            .rbw-admin-table .rbw-room-cell{ white-space: normal !important; min-width: 220px; }
+            .rbw-history-form{
+              width:100%;
+            }
+            .rbw-admin-table th,
+            .rbw-admin-table td{
+              white-space:nowrap;
+            }
+            .rbw-admin-table .rbw-room-cell{
+              white-space:normal !important;
+              min-width:220px;
+            }
           }
         </style>
 
         <?php
         $total_pages = max(1, ceil($total / $per_page));
         if ($total_pages > 1){
-          $base = add_query_arg(['page'=>'rbw-bookings','paged'=>'%#%'], admin_url('admin.php'));
+          $base = add_query_arg(array_merge($filter_args, ['paged'=>'%#%']), admin_url('admin.php'));
           echo '<div class="tablenav"><div class="tablenav-pages">';
           echo paginate_links([
             'base' => $base,
@@ -2384,7 +2870,7 @@ class RBW_Admin {
                 <td class="right"><?php echo wp_kses_post($money($deposit)); ?></td>
               </tr>
               <tr class="grand">
-                <td><?php esc_html_e('Balance Due', 'rbw'); ?></td>
+                <td><?php esc_html_e('Due', 'rbw'); ?></td>
                 <td class="right"><?php echo wp_kses_post($money($balance)); ?></td>
               </tr>
             </table>
@@ -2485,7 +2971,54 @@ class RBW_Admin {
     wp_trash_post($booking_id);
 
     $redirect = !empty($_GET['redirect_to']) ? esc_url_raw($_GET['redirect_to']) : admin_url('admin.php?page=rbw-bookings');
+    if (class_exists('RBW_SMS') && method_exists('RBW_SMS', 'is_cancel_enabled') && RBW_SMS::is_cancel_enabled()) {
+      $sms_result = RBW_SMS::send_booking_cancelled($booking_id, true);
+      if (is_wp_error($sms_result)) {
+        $redirect = add_query_arg([
+          'rbw_sms' => 'error',
+          'rbw_sms_msg' => $sms_result->get_error_message(),
+        ], $redirect);
+      } else {
+        $redirect = add_query_arg(['rbw_sms' => 'sent'], $redirect);
+      }
+    }
     wp_safe_redirect($redirect);
+    exit;
+  }
+
+  public static function retry_sms(){
+    if (empty($_GET['booking_id'])) wp_die(__('Missing booking ID', 'rbw'));
+    $booking_id = absint($_GET['booking_id']);
+    if (!current_user_can('manage_options')) wp_die(__('Insufficient permissions', 'rbw'));
+
+    check_admin_referer('rbw_retry_sms_'.$booking_id);
+
+    $redirect = !empty($_GET['redirect_to']) ? esc_url_raw((string)$_GET['redirect_to']) : admin_url('admin.php?page=rbw-bookings');
+    $sms_type = sanitize_key((string)($_GET['sms_type'] ?? 'booking'));
+    if (!class_exists('RBW_SMS')) {
+      wp_safe_redirect(add_query_arg(['rbw_sms' => 'missing'], $redirect));
+      exit;
+    }
+
+    if ($sms_type === 'cancel') {
+      if (!method_exists('RBW_SMS', 'send_booking_cancelled')) {
+        wp_safe_redirect(add_query_arg(['rbw_sms' => 'missing'], $redirect));
+        exit;
+      }
+      $result = RBW_SMS::send_booking_cancelled($booking_id, true);
+    } else {
+      $result = RBW_SMS::send_booking_confirmation($booking_id, true);
+    }
+    if (is_wp_error($result)) {
+      $msg = $result->get_error_message();
+      wp_safe_redirect(add_query_arg([
+        'rbw_sms' => 'error',
+        'rbw_sms_msg' => $msg,
+      ], $redirect));
+      exit;
+    }
+
+    wp_safe_redirect(add_query_arg(['rbw_sms' => 'sent'], $redirect));
     exit;
   }
 
@@ -2493,15 +3026,31 @@ class RBW_Admin {
     if (!current_user_can('manage_options')) wp_die(__('Insufficient permissions', 'rbw'));
     check_admin_referer('rbw_export_bookings');
 
-    $query = new WP_Query([
+    $from_date = self::sanitize_history_date($_GET['from_date'] ?? '');
+    $to_date = self::sanitize_history_date($_GET['to_date'] ?? '');
+    $status = sanitize_key((string)($_GET['status'] ?? 'all'));
+    if (!in_array($status, ['all', 'publish', 'completed', 'pending', 'trash'], true)) $status = 'all';
+    $sort = strtolower(sanitize_text_field((string)($_GET['sort'] ?? 'desc')));
+    if (!in_array($sort, ['asc', 'desc'], true)) $sort = 'desc';
+
+    $query_args = [
       'post_type' => 'rbw_booking',
-      'post_status' => 'publish',
       'posts_per_page' => -1,
       'orderby' => 'date',
-      'order' => 'DESC',
-    ]);
+      'order' => strtoupper($sort),
+    ];
+    $query_args = self::apply_history_status_filter($query_args, $status);
+    $date_query = [];
+    if ($from_date !== '') $date_query['after'] = $from_date;
+    if ($to_date !== '') $date_query['before'] = $to_date;
+    if (!empty($date_query)) {
+      $date_query['inclusive'] = true;
+      $date_query['column'] = 'post_date';
+      $query_args['date_query'] = [$date_query];
+    }
+    $query = new WP_Query($query_args);
 
-    $filename = 'rbw-bookings-' . date('Y-m-d') . '.csv';
+    $filename = 'rbw-booking-history-' . date('Y-m-d') . '.csv';
     header('Content-Type: text/csv; charset=utf-8');
     header('Content-Disposition: attachment; filename=' . $filename);
     header('Pragma: no-cache');
@@ -2511,6 +3060,7 @@ class RBW_Admin {
     fputcsv($out, [
       'Booking ID',
       'Created',
+      'Status',
       'Rooms',
       'Guest Name',
       'Phone',
@@ -2519,7 +3069,7 @@ class RBW_Admin {
       'Check Out',
       'Total',
       'Deposit',
-      'Balance',
+      'Due',
       'Payment Mode',
       'Discount',
       'Rooms Needed',
@@ -2544,12 +3094,15 @@ class RBW_Admin {
       $rooms_json = get_post_meta($post->ID, '_rbw_rooms_json', true);
       $room_parts = self::parse_rooms_meta($rooms_json);
       $room_display = !empty($room_parts) ? implode(', ', $room_parts) : ($room ?: $post->post_title);
+      $status_parts = self::get_booking_status_parts($post);
+      $status_label = $status_parts['label'];
       $nid = get_post_meta($post->ID, '_rbw_nid_url', true);
       $order_id = get_post_meta($post->ID, '_rbw_order_id', true);
 
       fputcsv($out, [
         $post->ID,
         get_the_time(get_option('date_format') . ' ' . get_option('time_format'), $post),
+        $status_label,
         $room_display,
         $guest,
         $phone,

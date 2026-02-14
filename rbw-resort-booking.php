@@ -85,11 +85,13 @@ require_once RBW_PLUGIN_DIR . 'includes/class-rbw-admin.php';
 require_once RBW_PLUGIN_DIR . 'includes/class-rbw-availability.php';
 require_once RBW_PLUGIN_DIR . 'includes/class-rbw-ajax.php';
 require_once RBW_PLUGIN_DIR . 'includes/class-rbw-woocommerce.php';
+require_once RBW_PLUGIN_DIR . 'includes/class-rbw-sms.php';
 
 // Boot
 add_action('plugins_loaded', function(){
   RBW_Admin::init();
   RBW_Ajax::init();
+  RBW_SMS::init();
   if (class_exists('WooCommerce')) {
     RBW_WooCommerce::init();
   }

@@ -43,7 +43,7 @@ class RBW_WooCommerce {
       $item_data[] = ['name'=>'Discount', 'value'=>wc_price($discount)];
     }
     $item_data[] = ['name'=>'Pay Now', 'value'=>wc_price($pay_now)];
-    $item_data[] = ['name'=>'Balance Due', 'value'=>wc_price((float)$b['balance'])];
+    $item_data[] = ['name'=>'Due', 'value'=>wc_price((float)$b['balance'])];
     $item_data[] = ['name'=>'Payment Mode', 'value'=>esc_html($pay_mode === 'full' ? 'Full (5% off)' : 'Advance payment')];
     if ($group_extra > 0) {
       $item_data[] = ['name'=>'Group Extra Advance', 'value'=>wc_price($group_extra) . ' per additional room'];
@@ -268,7 +268,7 @@ class RBW_WooCommerce {
     if ($discount > 0) $add($rows, 'Discount', wc_price($discount));
     $pay_now_amount = ($pay_now !== '' && $pay_now !== null) ? (float)$pay_now : $deposit;
     if ($pay_now_amount > 0) $add($rows, 'Pay Now', wc_price($pay_now_amount));
-    if ($balance > 0) $add($rows, 'Balance Due', wc_price($balance));
+    if ($balance > 0) $add($rows, 'Due', wc_price($balance));
     if (!empty($pay_mode)) {
       $add($rows, 'Payment Mode', esc_html($pay_mode === 'full' ? 'Full (5% off)' : 'Advance payment'));
     }
@@ -343,6 +343,12 @@ class RBW_WooCommerce {
       update_post_meta($booking_id, '_rbw_order_id', $order_id);
       if (class_exists('RBW_Admin')) {
         RBW_Admin::get_customer_invoice_url($booking_id, false);
+      }
+      if (class_exists('RBW_SMS')) {
+        $sms_result = RBW_SMS::send_booking_confirmation($booking_id);
+        if (is_wp_error($sms_result)) {
+          error_log('[RBW SMS] booking #' . $booking_id . ' failed: ' . $sms_result->get_error_message());
+        }
       }
 
       wp_clear_scheduled_hook('rbw_maybe_cancel_booking', [$booking_id]);
